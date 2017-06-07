@@ -116,10 +116,9 @@ class Core(object):
         else:
             print("datatype not found...")
             return None
-    def addLiteralAttribute(self, id, namespace_prefix, term, object, namespace_uri=None):
+    def addLiteralAttribute(self, namespace_prefix, term, object, namespace_uri=None):
         """
         Adds generic literal and inserts into the graph
-        :param id: subject identifier/URI
         :param namespace_prefix: namespace prefix
         :param pred_term: predidate term to associate with tuple
         :param object: literal to add as object of tuple
@@ -141,18 +140,17 @@ class Core(object):
         #figure out if predicate namespace is defined, if not, return predicate namespace error
         try:
             if (datatype != None):
-                id.add_attributes({self.namespaces[namespace_prefix][term]: Literal(object, datatype=datatype)})
+                self.id.add_attributes({self.namespaces[namespace_prefix][term]: Literal(object, datatype=datatype)})
             else:
-                id.add_attributes({self.namespaces[namespace_prefix][term]: Literal(object)})
+                self.id.add_attributes({self.namespaces[namespace_prefix][term]: Literal(object)})
         except KeyError as e:
             print("\nPredicate namespace identifier \" %s \" not found! \n" % (str(e).split("'")[1]))
             print("Use addNamespace method to add namespace before adding literal attribute \n")
             print("No attribute has been added \n")
-    def addAttributesWithNamespaces(self,id,attributes):
+    def addAttributesWithNamespaces(self,attributes):
         """
         Adds generic attributes in bulk to object [id] and inserts into the graph
 
-        :param id: subject identifier/URI
         :param attributes: List of dictionaries with keys prefix, uri, term, value} \
         example: [ {uri:"http://ncitt.ncit.nih.gov/", prefix:"ncit", term:"age", value:15},
                    {uri:"http://ncitt.ncit.nih.gov/", prefix:"ncit", term:"gender", value:"M"}]
@@ -172,15 +170,14 @@ class Core(object):
             #figure out datatype of literal
             datatype = self.getDataType(tuple['value'])
             if (datatype != None):
-                id.add_attributes({self.namespaces[tuple['prefix']][tuple['term']]:Literal(tuple['value'],datatype=datatype)})
+                self.id.add_attributes({self.namespaces[tuple['prefix']][tuple['term']]:Literal(tuple['value'],datatype=datatype)})
             else:
-                id.add_attributes({self.namespaces[tuple['prefix']][tuple['term']]:Literal(tuple['value'])})
+                self.id.add_attributes({self.namespaces[tuple['prefix']][tuple['term']]:Literal(tuple['value'])})
 
-    def addAttributes(self,id,attributes):
+    def addAttributes(self,attributes):
         """
         Adds generic attributes in bulk to object [id] and inserts into the graph
 
-        :param id: subject identifier/URI
         :param attributes: Dictionary with keys as prefix:term and value of attribute} \
         example: {"ncit:age":15,"ncit:gender":"M", Constants.NIDM_FAMILY_NAME:"Keator"}
         :return: TypeError if namespace prefix does not exist in graph
@@ -204,20 +201,19 @@ class Core(object):
             #else:
                 #we're using the Constants form
             if (datatype != None):
-                id.add_attributes({key:Literal(attributes[key],datatype=datatype)})
+                self.id.add_attributes({key:Literal(attributes[key],datatype=datatype)})
             else:
-                id.add_attributes({key:Literal(attributes[key])})
+                self.id.add_attributes({key:Literal(attributes[key])})
 
-    def addURIRef(self,id,pred_namespace,pred_term, object):
+    def addURIRef(self,pred_namespace,pred_term, object):
         """
         Adds URIRef attribute and inserts into the graph
-        :param id: subject identifier/URI
         :param pred_namespace: predicate namespace URL
         :param pred_term: predidate term to associate with tuple
         :param object: URIRef to add as object of tuple
         :return: none
         """
-        id.add_attributes({self.namespaces[pred_namespace][pred_term]: Literal(object, XSD_ANYURI)})
+        self.id.add_attributes({self.namespaces[pred_namespace][pred_term]: Literal(object, XSD_ANYURI)})
     def addPerson(self):
         """
         Generic add prov:Person, use addLiteralAttribute to add more descriptive attributes

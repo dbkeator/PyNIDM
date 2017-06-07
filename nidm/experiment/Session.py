@@ -28,7 +28,7 @@ class Session(Core):
 
         """
         Core.__init__(self)
-        self.session = self.addSession(project)
+        self.id = self.addSession(project)
 
 
 
@@ -75,4 +75,4 @@ class Session(Core):
         :param: none
         :return: session object
         """
-        return self.session
+        return self.id

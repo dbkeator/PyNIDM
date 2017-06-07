@@ -37,11 +37,11 @@ def main(argv):
 
     #add attributes separately to account for ambiguity in BIDS datasets
     if 'ReferencesAndLinks' in dataset_data:
-        nidm_doc.addAttributes(nidm_doc.getProject(),{BIDS_Constants.ReferencesAndLinks:dataset_data['ReferencesAndLinks']})
+        nidm_doc.addAttributes({BIDS_Constants.ReferencesAndLinks:dataset_data['ReferencesAndLinks']})
     if 'License' in dataset_data:
-        nidm_doc.addAttributes(nidm_doc.getProject(),{BIDS_Constants.License:dataset_data['License']})
+        nidm_doc.addAttributes({BIDS_Constants.License:dataset_data['License']})
     if 'Authors' in dataset_data:
-        nidm_doc.addAttributes(nidm_doc.getProject(),{BIDS_Constants.Authors:dataset_data['Authors']})
+        nidm_doc.addAttributes({BIDS_Constants.Authors:dataset_data['Authors']})
 
 
     #create session object for participants information
@@ -62,7 +62,7 @@ def main(argv):
             participant = acq.addParticipant(row['participant_id'])
             #add metadata to acquisition entity
 
-            acq.addAttributes(acq.getAcquisitionEntity(),{"prov:label":"Participants file demographics", "ncit:age":int(row['age']), "ncit:gender":row['gender'], "ncit:diagnosis":row['diagnosis']})
+            acq.addAttributes({"prov:label":"Participants file demographics", "ncit:age":int(row['age']), "ncit:gender":row['gender'], "ncit:diagnosis":row['diagnosis']})
 
     #create acquisition objects for each scan for each subject
     #get BIDS layout
@@ -115,6 +115,7 @@ def main(argv):
     print(nidm_doc.graph.get_provn())
     with open(outputfile,'w') as f:
        #f.write(nidm_doc.serializeTurtle())
+
         f.write(nidm_doc.graph.get_provn())
 if __name__ == "__main__":
    main(sys.argv[1:])

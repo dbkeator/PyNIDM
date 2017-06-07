@@ -27,7 +27,9 @@ class AcquisitionObject(Core):
         """
         #execute default parent class constructor
         Core.__init__(self)
-        self.acq = self.addAcquisition(session)
+        self.acq_objs = self.addAcquisition(session)
+        #sets default "self.id" as the entity for the acquisition object
+        self.id = self.acq_objs['entity']
 
 
     #constructor with user-supplied graph, namespaces come from base class import of Constants.py

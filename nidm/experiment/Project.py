@@ -32,7 +32,7 @@ class Project(Core, ProvActivity):
         """
         #execute default parent class constructor
         Core.__init__(self)
-        self.project = self.addProject(project_name,project_id,project_description)
+        self.id = self.addProject(project_name,project_id,project_description)
 
 
     #constructor with user-supplied graph, namespaces come from base class import of Constants.py
@@ -60,7 +60,7 @@ class Project(Core, ProvActivity):
         Returns project object in current graph
         :return: project object for use in adding attributes or associating agents with project for example
         """
-        return self.project
+        return self.id
     #adds and project entity to graph and stores URI
     def addProject(self, project_name, project_id, project_description):
         """
