@@ -304,6 +304,7 @@ NIDM_PROJECT = QualifiedName(provNamespace("nidm", NIDM), 'Project')
 NIDM_PROJECT_IDENTIFIER = QualifiedName(provNamespace("sio", SIO),"Identifier")
 NIDM_PROJECT_NAME = QualifiedName(provNamespace("dctypes", DCTYPES),"title")
 NIDM_PROJECT_DESCRIPTION = QualifiedName(provNamespace("dct", DCT),"description")
+NIDM_DATAELEMENT = QualifiedName(provNamespace("nidm", NIDM), 'DataElement')
 NIDM_DESCRIPTION = QualifiedName(provNamespace("dct", DCT),"description")
 NIDM_DEFINITION = QualifiedName(provNamespace("dct", DCT),"description")
 NIDM_PROJECT_LICENSE = QualifiedName(provNamespace("dct", DCT),"license")
@@ -568,6 +569,7 @@ NIDM_ASSESSMENT_ACQUISITION,
 NIDM_ACQUISITION_ENTITY,
 NIDM_DEMOGRAPHICS_ENTITY,
 NIDM_ASSESSMENT_ENTITY,
+NIDM_DATAELEMENT,
 NIDM_FILENAME,
 NIDM_FILE,
 NIDM_PI,

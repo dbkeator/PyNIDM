@@ -277,7 +277,7 @@ def GetParticipantIDs(nidm_file_list,output_file=None):
     '''
 
     query = '''
-
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX prov:<http://www.w3.org/ns/prov#>
         PREFIX sio: <http://semanticscience.org/ontology/sio.owl#>
         PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
@@ -286,15 +286,32 @@ def GetParticipantIDs(nidm_file_list,output_file=None):
         WHERE {
 
             ?activity rdf:type prov:Activity ;
-		        prov:qualifiedAssociation _:blanknode .
+                prov:qualifiedAssociation [prov:wasAssociatedWith ?uuid] .
 
-	        _:blanknode prov:hadRole %s ;
-                 prov:agent ?uuid  .
-
-	        ?uuid %s ?ID .
+			?uuid %s ?ID.
 
         }
-    ''' %(Constants.NIDM_PARTICIPANT,Constants.NIDM_SUBJECTID)
+    ''' %Constants.NIDM_SUBJECTID
+
+    #query = '''
+
+    #    PREFIX prov:<http://www.w3.org/ns/prov#>
+    #    PREFIX sio: <http://semanticscience.org/ontology/sio.owl#>
+    #    PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+
+    #    SELECT DISTINCT ?uuid ?ID
+    #    WHERE {
+
+    #        ?activity rdf:type prov:Activity ;
+    #		       prov:qualifiedAssociation _:blanknode .
+
+	#        _:blanknode prov:hadRole %s ;
+    #             prov:wasAssociatedWith ?uuid  .
+
+	#        ?uuid %s ?ID .
+
+    #    }
+    #''' %(Constants.NIDM_PARTICIPANT,Constants.NIDM_SUBJECTID)
 
     df = sparql_query_nidm(nidm_file_list,query, output_file=output_file)
 
@@ -533,6 +550,24 @@ def GetDataElements(nidm_file_list):
 
             }'''
 
+    df = sparql_query_nidm(nidm_file_list.split(','), query, output_file=None)
+    return df
+
+def GetTuplesForUUID(uuid, nidm_file_list):
+    '''
+    Returns tuples for object with uuid
+    :param nidm_file_list:
+    :return: tuples
+    '''
+
+    query = '''
+        SELECT DISTINCT ?pred ?obj
+        WHERE {
+            <%s> ?pred ?obj
+
+        }
+
+    ''' %(uuid)
     df = sparql_query_nidm(nidm_file_list.split(','), query, output_file=None)
     return df
 

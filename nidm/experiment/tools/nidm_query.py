@@ -71,6 +71,12 @@ def query(nidm_file_list, query_file, output_file, get_participants, get_instrum
 
     if get_participants:
         df = GetParticipantIDs(nidm_file_list.split(','),output_file=output_file)
+        if ((output_file) is None):
+
+            print(df)
+
+
+        return df
     elif get_instruments:
         #first get all project UUIDs then iterate and get instruments adding to output dataframe
         project_list = GetProjectsUUID(nidm_file_list.split(','))
