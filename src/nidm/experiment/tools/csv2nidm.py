@@ -27,9 +27,10 @@ from nidm.experiment import (
     Session,
 )
 from nidm.experiment.Query import (
-    GetAcqusitionEntityMetadataFromSession,
+    GetAcquisitionEntityMetadataFromSession,
     GetParticipantIDs,
     GetParticipantSessionsMetadata,
+    GetSessionUUID,
 )
 from nidm.experiment.Utils import (
     add_attributes_with_cde,
@@ -40,25 +41,7 @@ from nidm.experiment.Utils import (
     redcap_datadictionary_to_json,
 )
 
-# def createDialogBox(search_results):
-# class NewListbox(tk.Listbox):
-
-#    def autowidth(self, maxwidth=100):
-#        autowidth(self, maxwidth)
-
-
-# def autowidth(list, maxwidth=100):
-#    f = font.Font(font=list.cget("font"))
-#    pixels = 0
-#    for item in list.get(0, "end"):
-#        pixels = max(pixels, f.measure(item))
-#    # bump listbox size until all entries fit
-#    pixels = pixels + 10
-#    width = int(list.cget("width"))
-#    for w in range(0, maxwidth+1, 5):
-#        if list.winfo_reqwidth() >= pixels:
-#            break
-#        list.config(width=width+w)
+# adding click command line params interface outside main function
 
 
 def ask_idfield(df):
@@ -150,21 +133,48 @@ def match_acquistion_task_run_from_session(session_uuid, task, run, nidm_file):
     :return: Returns UUID of acquisition activity and entity matching task and run
     """
 
-    # now get acquisition metadata linked to the identified session
-    acquisition_metadata = GetAcqusitionEntityMetadataFromSession(
-        [nidm_file], session_uuid
-    )
+    # if session_uuid is None because user didn't supply a session number in the CSV file
+    # implying there was no session number in the BIDS dataset, we have to search across all
+    # sessions to find the one that contains the task and/or run matching what the user
+    # supplied.
+    if session_uuid is None:
+        session_act = GetSessionUUID([nidm_file])
+        for _, session_uuid in session_act.iterrows():
+            # now get acquisition metadata linked to the identified session
+            acquisition_metadata = GetAcquisitionEntityMetadataFromSession(
+                [nidm_file], session_uuid["ses_act"]
+            )
 
-    # set derivative_image_entity to None in case we can't find an acquisition entity for the supplied task
-    derivative_acq_entity = None
-    acquisition_act = None
+            # set derivative_image_entity to None in case we can't find an acquisition entity for the supplied task
+            derivative_acq_entity = None
+            acquisition_act = None
 
-    # if a valid task name was supplied to this function
-    if task is not None:
-        for _, task_row in acquisition_metadata.iterrows():
-            # check tasks match for this acquisition and if so, assume it's the correct
-            # acquisition used in the derivative data
-            if str(task_row["o"]) == task:
+            # if a valid task name was supplied to this function
+            if task is not None:
+                for _, task_row in acquisition_metadata.iterrows():
+                    # check tasks match for this acquisition and if so, assume it's the correct
+                    # acquisition used in the derivative data
+                    if str(task_row["o"]) == task:
+                        # if a valid run number was supplied to this function
+                        if run is not None:
+                            for _, run_row in acquisition_metadata.iterrows():
+                                # if run in this acquisition entity matching task
+                                if run_row["o"] != run:
+                                    # wrong acquisition entity so set to None
+                                    derivative_acq_entity = None
+
+                                else:
+                                    derivative_acq_entity = run_row["acq_entity"]
+                                    acquisition_act = run_row["acq_activity"]
+                                    break
+                        # no run number provided so assume matching task is correct acquistion entity
+                        else:
+                            derivative_acq_entity = task_row["acq_entity"]
+                            acquisition_act = task_row["acq_activity"]
+                            break
+
+            else:
+                # maybe they supplied a run and not the task so we now try and match by run only
                 # if a valid run number was supplied to this function
                 if run is not None:
                     for _, run_row in acquisition_metadata.iterrows():
@@ -176,129 +186,163 @@ def match_acquistion_task_run_from_session(session_uuid, task, run, nidm_file):
                         else:
                             derivative_acq_entity = run_row["acq_entity"]
                             acquisition_act = run_row["acq_activity"]
-                # no run number provided so assume matching task is correct acquistion entity
-                else:
-                    derivative_acq_entity = task_row["acq_entity"]
-                    acquisition_act = task_row["acq_activity"]
+                            break
 
+    # if user supplied session number to csv2nidm in CSV files, we can then use the session_uuid
+    # directly that corresponds to that session number
     else:
-        # maybe they supplied a run and not the task so we now try and match by run only
-        # if a valid run number was supplied to this function
-        if run is not None:
-            for _, run_row in acquisition_metadata.iterrows():
-                # if run in this acquisition entity matching task
-                if run_row["o"] != run:
-                    # wrong acquisition entity so set to None
-                    derivative_acq_entity = None
+        acquisition_metadata = GetAcquisitionEntityMetadataFromSession(
+            [nidm_file], session_uuid
+        )
 
-                else:
-                    derivative_acq_entity = run_row["acq_entity"]
-                    acquisition_act = run_row["acq_activity"]
+        # set derivative_image_entity to None in case we can't find an acquisition entity for the supplied task
+        derivative_acq_entity = None
+        acquisition_act = None
+
+        # if a valid task name was supplied to this function
+        if task is not None:
+            for _, task_row in acquisition_metadata.iterrows():
+                # check tasks match for this acquisition and if so, assume it's the correct
+                # acquisition used in the derivative data
+                if str(task_row["o"]) == task:
+                    # if a valid run number was supplied to this function
+                    if run is not None:
+                        for _, run_row in acquisition_metadata.iterrows():
+                            # if run in this acquisition entity matching task
+                            if run_row["o"] != run:
+                                # wrong acquisition entity so set to None
+                                derivative_acq_entity = None
+
+                            else:
+                                derivative_acq_entity = run_row["acq_entity"]
+                                acquisition_act = run_row["acq_activity"]
+                    # no run number provided so assume matching task is correct acquistion entity
+                    else:
+                        derivative_acq_entity = task_row["acq_entity"]
+                        acquisition_act = task_row["acq_activity"]
+
+        else:
+            # maybe they supplied a run and not the task so we now try and match by run only
+            # if a valid run number was supplied to this function
+            if run is not None:
+                for _, run_row in acquisition_metadata.iterrows():
+                    # if run in this acquisition entity matching task
+                    if run_row["o"] != run:
+                        # wrong acquisition entity so set to None
+                        derivative_acq_entity = None
+
+                    else:
+                        derivative_acq_entity = run_row["acq_entity"]
+                        acquisition_act = run_row["acq_activity"]
 
     return derivative_acq_entity, acquisition_act
 
 
-def main():
-    parser = ArgumentParser(
-        description="This program will load in a CSV file and iterate over the header \
-     variable names performing an elastic search of https://scicrunch.org/ for NIDM-ReproNim \
-     tagged terms that fuzzy match the variable names.  The user will then interactively pick \
-     a term to associate with the variable name.  The resulting annotated CSV data will \
-     then be written to a NIDM data file.  Note, you must obtain an API key to Interlex by signing up \
-     for an account at scicrunch.org then going to My Account and API Keys.  Then set the environment \
-     variable INTERLEX_API_KEY with your key."
-    )
+def csv2nidm_main(args=None):
+    if args is None:
+        parser = ArgumentParser(
+            description="This program will load in a CSV file and iterate over the header \
+         variable names performing an elastic search of https://scicrunch.org/ for NIDM-ReproNim \
+         tagged terms that fuzzy match the variable names.  The user will then interactively pick \
+         a term to associate with the variable name.  The resulting annotated CSV data will \
+         then be written to a NIDM data file.  Note, you must obtain an API key to Interlex by signing up \
+         for an account at scicrunch.org then going to My Account and API Keys.  Then set the environment \
+         variable INTERLEX_API_KEY with your key."
+        )
 
-    parser.add_argument(
-        "-csv", dest="csv_file", required=True, help="Full path to CSV file to convert"
-    )
-    # parser.add_argument('-ilxkey', dest='key', required=True, help="Interlex/SciCrunch API key to use for query")
-    dd_group = parser.add_mutually_exclusive_group()
-    dd_group.add_argument(
-        "-json_map",
-        dest="json_map",
-        required=False,
-        help="Full path to user-supplied JSON file containing variable-term mappings.",
-    )
-    dd_group.add_argument(
-        "-csv_map",
-        dest="csv_map",
-        required=False,
-        help="Full path to user-supplied CSV-version of data dictionary containing the following "
-        "required columns: "
-        "source_variable,"
-        "label,"
-        "description,"
-        "valueType,"
-        "measureOf,"
-        "isAbout(For multiple isAbout entries, use a ';' to separate them in a single column "
-        "within the csv file dataframe),"
-        "unitCode,"
-        "minValue,"
-        "maxValue,",
-    )
-    dd_group.add_argument(
-        "-redcap",
-        dest="redcap",
-        required=False,
-        help="Full path to a user-supplied RedCap formatted data dictionary for csv file.",
-    )
-    parser.add_argument(
-        "-nidm",
-        dest="nidm_file",
-        required=False,
-        help="Optional full path of NIDM file to add CSV->NIDM converted graph to",
-    )
-    parser.add_argument(
-        "-no_concepts",
-        action="store_true",
-        required=False,
-        help="If this flag is set then no concept associations will be"
-        "asked of the user.  This is useful if you already have a -json_map specified without concepts and want to"
-        "simply run this program to get a NIDM file with user interaction to associate concepts.",
-    )
-    parser.add_argument(
-        "-log",
-        "--log",
-        dest="logfile",
-        required=False,
-        default=None,
-        help="full path to directory to save log file. Log file name is csv2nidm_[arg.csv_file].log",
-    )
-    parser.add_argument(
-        "-dataset_id",
-        "--dataset_id",
-        dest="dataset_identifier",
-        required=False,
-        default=None,
-        help="If this is provided, which can be any dataset ID although its suggested to use a dataset"
-        "DOI if available, unique data element IDs will use this information as part of the hash.",
-    )
-    parser.add_argument(
-        "-out",
-        dest="output_file",
-        required=False,
-        help="Full path with filename to save NIDM file",
-    )
-    # added to support optional -derivative derived data group of arguments which includes the software metadata
-    parser.add_argument(
-        "-derivative",
-        dest="derivative",
-        required=False,
-        help="If set, indicates CSV file provided is derivative data which includes columns 'ses','task','run'"
-        "which will be used to identify the subject scan session, run, and verify against the task if an existing "
-        "nidm file is provided and was made from bids (bidsmri2nidm). Otherwise these additional columns"
-        "(ses, task,run) will be ignored.  After the -derivative parameter one must provide the software metadata"
-        "CSV file which includes columns: title, description, version, url, cmdline, platform, ID"
-        "These software metadata columns can have empty entries and are defined as follows:"
-        "title: Title of the software"
-        "description: Description of the software"
-        "version: Version of the software"
-        "url: Link to software"
-        "cmdline: Command line used to run the software generating the results in the provided CSV"
-        "ID: A url link to the term in a terminology resource (e.g. InterLex) for the software",
-    )
-    args = parser.parse_args()
+        parser.add_argument(
+            "-csv",
+            dest="csv_file",
+            required=True,
+            help="Full path to CSV file to convert",
+        )
+        # parser.add_argument('-ilxkey', dest='key', required=True, help="Interlex/SciCrunch API key to use for query")
+        dd_group = parser.add_mutually_exclusive_group()
+        dd_group.add_argument(
+            "-json_map",
+            dest="json_map",
+            required=False,
+            help="Full path to user-supplied JSON file containing variable-term mappings.",
+        )
+        dd_group.add_argument(
+            "-csv_map",
+            dest="csv_map",
+            required=False,
+            help="Full path to user-supplied CSV-version of data dictionary containing the following "
+            "required columns: "
+            "source_variable, "
+            "label, "
+            "description, "
+            "valueType, "
+            "measureOf, "
+            "isAbout(For multiple isAbout entries, use a ';' to separate them in a single column "
+            "within the csv file dataframe), "
+            "unitCode, "
+            "minValue, "
+            "maxValue, ",
+        )
+        dd_group.add_argument(
+            "-redcap",
+            dest="redcap",
+            required=False,
+            help="Full path to a user-supplied RedCap formatted data dictionary for csv file. ",
+        )
+        parser.add_argument(
+            "-nidm",
+            dest="nidm_file",
+            required=False,
+            help="Optional full path of NIDM file to add CSV->NIDM converted graph to ",
+        )
+        parser.add_argument(
+            "-no_concepts",
+            action="store_true",
+            required=False,
+            help="If this flag is set then no concept associations will be "
+            "asked of the user.  This is useful if you already have a -json_map specified without concepts and want to "
+            "simply run this program to get a NIDM file with user interaction to associate concepts. ",
+        )
+        parser.add_argument(
+            "-log",
+            "--log",
+            dest="logfile",
+            required=False,
+            default=None,
+            help="full path to directory to save log file. Log file name is csv2nidm_[arg.csv_file].log ",
+        )
+        parser.add_argument(
+            "-dataset_id",
+            "--dataset_id",
+            dest="dataset_identifier",
+            required=False,
+            default=None,
+            help="If this is provided, which can be any dataset ID although its suggested to use a dataset "
+            "DOI if available, unique data element IDs will use this information as part of the hash. ",
+        )
+        parser.add_argument(
+            "-out",
+            dest="output_file",
+            required=False,
+            help="Full path with filename to save NIDM file",
+        )
+        # added to support optional -derivative derived data group of arguments which includes the software metadata
+        parser.add_argument(
+            "-derivative",
+            dest="derivative",
+            required=False,
+            help="If set, indicates CSV file provided is derivative data which includes columns 'ses','task','run' "
+            "which will be used to identify the subject scan session, run, and verify against the task if an existing "
+            "nidm file is provided and was made from bids (bidsmri2nidm). Otherwise these additional columns "
+            "(ses, task,run) will be ignored.  After the -derivative parameter one must provide the software metadata "
+            "CSV file which includes columns: title, description, version, url, cmdline, platform, ID "
+            "These software metadata columns can have empty entries and are defined as follows: "
+            "title: Title of the software"
+            "description: Description of the software"
+            "version: Version of the software"
+            "url: Link to software"
+            "cmdline: Command line used to run the software generating the results in the provided CSV "
+            "ID: A url link to the term in a terminology resource (e.g. InterLex) for the software ",
+        )
+        args = parser.parse_args()
 
     # if we have a redcap datadictionary then convert it straight away to a json representation
     if args.redcap:
@@ -1111,4 +1155,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    csv2nidm_main()

@@ -1,0 +1,99 @@
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix ilx: <http://uri.interlex.org/> .
+@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .
+@prefix nfo: <http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#> .
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix niiri: <http://iri.nidash.org/> .
+@prefix onli: <http://neurolog.unice.fr/ontoneurolog/v3.0/instrument.owl#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sio: <http://semanticscience.org/ontology/sio.owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+niiri:age_km5gep a nidm:PersonalDataElement,
+        prov:Entity ;
+    rdfs:label "age" ;
+    dct:description "age" ;
+    nidm:isAbout ilx:ilx_0100400 ;
+    nidm:sourceVariable "age" ;
+    ilx:ilx_0739289 "NIDM" .
+
+niiri:ef988a8c-655a-11ef-b7e1-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    niiri:age_km5gep 32 ;
+    niiri:sex_ku10gn "M"^^xsd:string ;
+    nfo:filename "test_csv.csv"^^xsd:string ;
+    prov:Location "file:/test_csv.csv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ef9887a8-655a-11ef-b7e1-b6413a7a76c1 .
+
+niiri:ef98d88e-655a-11ef-b7e1-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    niiri:age_km5gep 45 ;
+    niiri:sex_ku10gn "F"^^xsd:string ;
+    nfo:filename "test_csv.csv"^^xsd:string ;
+    prov:Location "file:/test_csv.csv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ef98d5b4-655a-11ef-b7e1-b6413a7a76c1 .
+
+niiri:sex_ku10gn a nidm:PersonalDataElement,
+        prov:Entity ;
+    rdfs:label "sex" ;
+    dct:description "sex" ;
+    nidm:isAbout ilx:ilx_0738437 ;
+    nidm:sourceVariable "sex" ;
+    ilx:ilx_0739289 "NIDM" .
+
+niiri:subject_id_frli1p a nidm:PersonalDataElement,
+        prov:Entity ;
+    rdfs:label "subject_id" ;
+    dct:description "subject/participant identifier" ;
+    nidm:isAbout ndar:src_subject_id ;
+    nidm:sourceVariable "subject_id" .
+
+niiri:ef98842e-655a-11ef-b7e1-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:ef97f0f4-655a-11ef-b7e1-b6413a7a76c1 .
+
+niiri:ef9887a8-655a-11ef-b7e1-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:ef98842e-655a-11ef-b7e1-b6413a7a76c1 ;
+    prov:qualifiedAssociation [ a prov:Association ;
+            prov:agent niiri:ef98b098-655a-11ef-b7e1-b6413a7a76c1 ;
+            prov:hadRole sio:Subject ] .
+
+niiri:ef98b098-655a-11ef-b7e1-b6413a7a76c1 a prov:Agent,
+        prov:Person ;
+    ndar:src_subject_id "XXX"^^xsd:string .
+
+niiri:ef98d2bc-655a-11ef-b7e1-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:ef97f0f4-655a-11ef-b7e1-b6413a7a76c1 .
+
+niiri:ef98d5b4-655a-11ef-b7e1-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:ef98d2bc-655a-11ef-b7e1-b6413a7a76c1 ;
+    prov:qualifiedAssociation [ a prov:Association ;
+            prov:agent niiri:ef98eb26-655a-11ef-b7e1-b6413a7a76c1 ;
+            prov:hadRole sio:Subject ] .
+
+niiri:ef98eb26-655a-11ef-b7e1-b6413a7a76c1 a prov:Agent,
+        prov:Person ;
+    ndar:src_subject_id "YYY"^^xsd:string .
+
+ilx:ilx_0100400 a prov:Entity ;
+    rdfs:label "Age" .
+
+ilx:ilx_0738437 a prov:Entity ;
+    rdfs:label "gender" .
+
+ndar:src_subject_id a prov:Entity ;
+    rdfs:label "src_subject_id" .
+
+niiri:ef97f0f4-655a-11ef-b7e1-b6413a7a76c1 a nidm:Project,
+        prov:Activity ;
+    nfo:filename "test_csv.csv"^^xsd:string .
+
+nidm:PersonalDataElement rdfs:subClassOf nidm:DataElement .

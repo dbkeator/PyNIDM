@@ -1,0 +1,34 @@
+{
+    "DD(source='assessments.tsv', variable='participant_id')": {
+        "label": "participant_id",
+        "description": "subject/participant identifier",
+        "source_variable": "participant_id",
+        "responseOptions": {
+            "valueType": "http://www.w3.org/2001/XMLSchema#string"
+        },
+        "isAbout": [
+            {
+                "@id": "https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id",
+                "label": "src_subject_id"
+            }
+        ]
+    },
+    "DD(source='assessments.tsv', variable='IQ')": {
+        "responseOptions": {
+            "unitCode": "",
+            "minValue": "0",
+            "maxValue": "",
+            "valueType": "http://www.w3.org/2001/XMLSchema#float"
+        },
+        "label": "IQ",
+        "description": "IQ",
+        "source_variable": "IQ",
+        "associatedWith": "NIDM",
+        "isAbout": [
+            {
+                "@id": "https://www.cognitiveatlas.org/concept/id/trm_4a3fd79d0a666",
+                "label": "intelligence"
+            }
+        ]
+    }
+}

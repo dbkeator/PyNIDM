@@ -193,7 +193,7 @@ and API Keys.  Then set the environment variable INTERLEX_API_KEY with your key.
         #  else:
         #     outputfile = args.outputfile
         #     if (args.bidsignore):
-        #         addbidsignore(directory,args.outputfile)
+        #         addbidsignore(directory,argutputfile)
         outputfile = args.outputfile
         if args.bidsignore:
             addbidsignore(directory, args.outputfile)

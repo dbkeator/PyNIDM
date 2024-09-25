@@ -1,0 +1,56 @@
+{
+    "DD(source='test_csv.csv', variable='subject_id')": {
+        "label": "subject_id",
+        "description": "subject/participant identifier",
+        "source_variable": "subject_id",
+        "responseOptions": {
+            "valueType": "http://www.w3.org/2001/XMLSchema#string"
+        },
+        "isAbout": [
+            {
+                "@id": "https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id",
+                "label": "src_subject_id"
+            }
+        ]
+    },
+    "DD(source='test_csv.csv', variable='age')": {
+        "responseOptions": {
+            "unitCode": "years",
+            "minValue": "0",
+            "maxValue": "120",
+            "valueType": "http://www.w3.org/2001/XMLSchema#integer"
+        },
+        "label": "age",
+        "description": "age",
+        "source_variable": "age",
+        "associatedWith": "NIDM",
+        "isAbout": [
+            {
+                "@id": "http://uri.interlex.org/ilx_0100400",
+                "label": "Age"
+            }
+        ]
+    },
+    "DD(source='test_csv.csv', variable='sex')": {
+        "responseOptions": {
+            "minValue": "NA",
+            "maxValue": "NA",
+            "unitCode": "NA",
+            "valueType": "http://www.w3.org/2001/XMLSchema#complexType",
+            "choices": {
+                "male": "M",
+                "female": "F"
+            }
+        },
+        "label": "sex",
+        "description": "sex",
+        "source_variable": "sex",
+        "associatedWith": "NIDM",
+        "isAbout": [
+            {
+                "@id": "http://uri.interlex.org/ilx_0738437",
+                "label": "gender"
+            }
+        ]
+    }
+}

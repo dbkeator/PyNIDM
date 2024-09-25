@@ -230,7 +230,96 @@ def GetParticipantSessionsMetadata(nidm_file_list, subject_id):
     return df
 
 
-def GetAcqusitionEntityMetadataFromSession(nidm_file_list, session_uuid):
+def GetAcquisitionEntityUUIDFromProjectUUID(nidm_file_list, prj_uuid):
+    """
+    This function will return all metadata from Acquisition entities linked to session_uuid
+    :return: dataframe with acquisition metadata
+    """
+
+    query = f"""
+
+                    prefix nidm: <http://purl.org/nidash/nidm#>
+                    prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    prefix dct: <http://purl.org/dc/terms/>
+                    prefix prov: <http://www.w3.org/ns/prov#>
+                    prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                    prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                    select distinct ?acq_entity
+
+                    where {{
+
+                            <{prj_uuid}> dct:isPartOf ses_act> .
+                            ?acq_act prov:wasGeneratedBy ?ses_act .
+                            ?acq_entity prov:wasGeneratedBy ?acq_act .
+
+                    }}
+
+                """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetAcquisitionSessionAndActivityUUID(nidm_file_list):
+    """
+    This function will return all Acquisition activity UUIDs and linked Session UUIDs in the nidm_file_list
+    :return: dataframe with acquisition metadata
+    """
+
+    query = """
+
+                    prefix nidm: <http://purl.org/nidash/nidm#>
+                    prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    prefix dct: <http://purl.org/dc/terms/>
+                    prefix prov: <http://www.w3.org/ns/prov#>
+                    prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                    prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                    select distinct ?ses_act ?acq_act
+
+                    where {{
+                            ?acq_act prov:wasGeneratedBy ?ses_act .
+                    }}
+
+                """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetSessionUUID(nidm_file_list):
+    """
+    This function will return all Session UUIDs in the nidm_file_list
+    :return: dataframe with acquisition metadata
+    """
+
+    query = """
+                    prefix nidm: <http://purl.org/nidash/nidm#>
+                    prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    prefix dct: <http://purl.org/dc/terms/>
+                    prefix prov: <http://www.w3.org/ns/prov#>
+                    prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                    prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                    select distinct ?ses_act
+
+                    where {{
+                            ?ses_act dct:isPartOf ?prj_act ;
+                                rdf:type prov:Activity ;
+                                rdf:type nidm:Session .
+                    }}
+
+                """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetAcquisitionEntityMetadataFromSession(nidm_file_list, session_uuid):
     """
     This function will return all metadata from Acquisition entities linked to session_uuid
     :return: dataframe with acquisition metadata
@@ -1159,6 +1248,7 @@ def GetBrainVolumes(nidm_file_list):
     df = sparql_query_nidm(nidm_file_list.split(","), query, output_file=None)
     return df
 
+
 def GetBrainThickness(nidm_file_list):
     query = """
         # This query simply returns the brain thickness data without dependencies on other demographics/assessment measures.
@@ -1191,6 +1281,7 @@ def GetBrainThickness(nidm_file_list):
     df = sparql_query_nidm(nidm_file_list.split(","), query, output_file=None)
     return df
 
+
 def GetBrainSurfaceArea(nidm_file_list):
     query = """
         # This query simply returns the brain surface area data without dependencies on other demographics/assessment measures.
@@ -1222,6 +1313,7 @@ def GetBrainSurfaceArea(nidm_file_list):
             """
     df = sparql_query_nidm(nidm_file_list.split(","), query, output_file=None)
     return df
+
 
 def expandNIDMAbbreviation(shortKey) -> str:
     """

@@ -14,30 +14,47 @@
 @prefix sio: <http://semanticscience.org/ontology/sio.owl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-niiri:age_26kdnuh a nidm:PersonalDataElement,
+niiri:age_t6jnt3 a nidm:PersonalDataElement,
         prov:Entity ;
     rdfs:label "age" ;
     dct:description "Age in years" ;
     nidm:sourceVariable "age" ;
     ilx:ilx_0739289 "NIDM" .
 
-niiri:fa0d4418-7a9b-11ef-93fe-b6413a7a76c0 a bids:Dataset,
+niiri:d75e388a-7a9b-11ef-b6cc-b6413a7a76c0 a bids:Dataset,
         prov:Collection,
         prov:Entity ;
     bids:BIDSVersion "1.9.0"^^xsd:string ;
     dct:license "Creative Commons, Attribution-NonCommercial-Share Alike License"^^xsd:string ;
-    prov:hadMember niiri:bdc8af02-7a9b-11ef-93fe-b6413a7a76c0,
-        niiri:cdc69136-7a9b-11ef-93fe-b6413a7a76c0,
-        niiri:fdc6a0a4-7a9b-11ef-93fe-b6413a7a76c0 .
+    prov:hadMember niiri:da7237f6-7a9b-11ef-b6cc-b6413a7a76c0,
+        niiri:da724778-7a9b-11ef-b6cc-b6413a7a76c0,
+        niiri:da745518-7a9b-11ef-b6cc-b6413a7a76c0 .
 
-niiri:adc8ab6a-7a9b-11ef-93fe-b6413a7a76c0 a nidm:Acquisition,
+niiri:da723332-7a9b-11ef-b6cc-b6413a7a76c0 a nidm:Session,
         prov:Activity ;
-    dct:isPartOf niiri:edc819f2-7a9b-11ef-93fe-b6413a7a76c0 ;
+    dct:isPartOf niiri:d75e33f8-7a9b-11ef-b6cc-b6413a7a76c0 .
+
+niiri:da7237f6-7a9b-11ef-b6cc-b6413a7a76c0 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    niiri:age_t6jnt3 "30"^^xsd:string ;
+    nfo:filename "/Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids_v2/participants.tsv"^^xsd:string ;
+    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids_v2/participants.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:da723616-7a9b-11ef-b6cc-b6413a7a76c0 ;
+    prov:wasInfluencedBy niiri:da724778-7a9b-11ef-b6cc-b6413a7a76c0 .
+
+niiri:da73bbd0-7a9b-11ef-b6cc-b6413a7a76c0 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:d75e33f8-7a9b-11ef-b6cc-b6413a7a76c0 .
+
+niiri:da74518a-7a9b-11ef-b6cc-b6413a7a76c0 a nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:da73bbd0-7a9b-11ef-b6cc-b6413a7a76c0 ;
     prov:qualifiedAssociation [ a prov:Association ;
-            prov:agent niiri:adc6942e-7a9b-11ef-93fe-b6413a7a76c0 ;
+            prov:agent niiri:da723ad0-7a9b-11ef-b6cc-b6413a7a76c0 ;
             prov:hadRole sio:Subject ] .
 
-niiri:bdc8af02-7a9b-11ef-93fe-b6413a7a76c0 a nidm:AcquisitionObject,
+niiri:da745518-7a9b-11ef-b6cc-b6413a7a76c0 a nidm:AcquisitionObject,
         prov:Entity ;
     bids:EchoTime "0.03"^^xsd:float ;
     bids:FlipAngle 73 ;
@@ -54,48 +71,30 @@ niiri:bdc8af02-7a9b-11ef-93fe-b6413a7a76c0 a nidm:AcquisitionObject,
     nidm:hadAcquisitionModality nidm:MagneticResonanceImaging ;
     nidm:hadImageContrastType nidm:FlowWeighted ;
     nidm:hadImageUsageType nidm:Functional ;
-    nfo:filename "sub-XXX/ses-1/func/sub-XXX_ses-1_task-rest_bold.nii.gz"^^xsd:string ;
-    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids/sub-XXX/ses-1/func/sub-XXX_ses-1_task-rest_bold.nii.gz"^^xsd:string ;
-    prov:wasGeneratedBy niiri:adc8ab6a-7a9b-11ef-93fe-b6413a7a76c0 .
-
-niiri:cdc69136-7a9b-11ef-93fe-b6413a7a76c0 a onli:assessment-instrument,
-        nidm:AcquisitionObject,
-        prov:Entity ;
-    niiri:age_26kdnuh "30"^^xsd:string ;
-    nfo:filename "/Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids/participants.tsv"^^xsd:string ;
-    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids/participants.tsv"^^xsd:string ;
-    prov:wasGeneratedBy niiri:cdc68f2e-7a9b-11ef-93fe-b6413a7a76c0 ;
-    prov:wasInfluencedBy niiri:fdc6a0a4-7a9b-11ef-93fe-b6413a7a76c0 .
-
-niiri:edc819f2-7a9b-11ef-93fe-b6413a7a76c0 a nidm:Session,
-        prov:Activity ;
-    bids:session_number "1"^^xsd:string ;
-    dct:isPartOf niiri:ca0d3ed2-7a9b-11ef-93fe-b6413a7a76c0 .
-
-niiri:fdc68c72-7a9b-11ef-93fe-b6413a7a76c0 a nidm:Session,
-        prov:Activity ;
-    dct:isPartOf niiri:ca0d3ed2-7a9b-11ef-93fe-b6413a7a76c0 .
+    nfo:filename "sub-XXX/func/sub-XXX_task-rest_bold.nii.gz"^^xsd:string ;
+    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids_v2/sub-XXX/func/sub-XXX_task-rest_bold.nii.gz"^^xsd:string ;
+    prov:wasGeneratedBy niiri:da74518a-7a9b-11ef-b6cc-b6413a7a76c0 .
 
 nidm:PersonalDataElement rdfs:subClassOf nidm:DataElement .
 
-niiri:adc6942e-7a9b-11ef-93fe-b6413a7a76c0 a prov:Agent,
-        prov:Person ;
-    ndar:src_subject_id "XXX"^^xsd:string .
-
-niiri:ca0d3ed2-7a9b-11ef-93fe-b6413a7a76c0 a nidm:Project,
+niiri:d75e33f8-7a9b-11ef-b6cc-b6413a7a76c0 a nidm:Project,
         prov:Activity ;
     dcmitype:title "TEST-fmriprep"^^xsd:string .
 
-niiri:cdc68f2e-7a9b-11ef-93fe-b6413a7a76c0 a onli:instrument-based-assessment,
+niiri:da723616-7a9b-11ef-b6cc-b6413a7a76c0 a onli:instrument-based-assessment,
         nidm:Acquisition,
         prov:Activity ;
-    dct:isPartOf niiri:fdc68c72-7a9b-11ef-93fe-b6413a7a76c0 ;
+    dct:isPartOf niiri:da723332-7a9b-11ef-b6cc-b6413a7a76c0 ;
     prov:qualifiedAssociation [ a prov:Association ;
-            prov:agent niiri:adc6942e-7a9b-11ef-93fe-b6413a7a76c0 ;
+            prov:agent niiri:da723ad0-7a9b-11ef-b6cc-b6413a7a76c0 ;
             prov:hadRole sio:Subject ] .
 
-niiri:fdc6a0a4-7a9b-11ef-93fe-b6413a7a76c0 a bids:sidecar_file,
+niiri:da723ad0-7a9b-11ef-b6cc-b6413a7a76c0 a prov:Agent,
+        prov:Person ;
+    ndar:src_subject_id "XXX"^^xsd:string .
+
+niiri:da724778-7a9b-11ef-b6cc-b6413a7a76c0 a bids:sidecar_file,
         prov:Entity ;
-    nfo:filename "/Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids/participants.json"^^xsd:string ;
-    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids/participants.json"^^xsd:string ;
-    prov:wasGeneratedBy niiri:cdc68f2e-7a9b-11ef-93fe-b6413a7a76c0 .
+    nfo:filename "/Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids_v2/participants.json"^^xsd:string ;
+    prov:Location "file://Users/dkeator/Documents/Coding/PyNIDM/fmriprep_example/bids_v2/participants.json"^^xsd:string ;
+    prov:wasGeneratedBy niiri:da723616-7a9b-11ef-b6cc-b6413a7a76c0 .

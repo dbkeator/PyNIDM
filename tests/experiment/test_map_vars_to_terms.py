@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from nidm.experiment.Utils import map_variables_to_terms, write_json_mapping_file
+from nidm.experiment.tools.csv2nidm import csv2nidm_main
 
 
 @dataclass
@@ -156,6 +157,46 @@ def setup() -> Setup:
         bids_sidecar=bids_sidecar,
         bids_sidecar_simple=bids_sidecar_simple,
     )
+
+
+def test_csv2nidm_basic(setup: Setup, tmp_path: Path) -> None:
+    # write setup.data to csv file
+    setup.data.to_csv(join(tmp_path, "data.csv"), index=False)
+
+    # write json data dictionary to file
+    # test BIDS sidecar json file with all pynidm annotations
+    column_to_terms, cde = map_variables_to_terms(
+        df=setup.data,
+        json_source=setup.bids_sidecar,
+        directory=str(tmp_path),
+        assessment_name="test",
+        bids=True,
+    )
+
+    # write annotations to json file since data element annotations are complete
+    write_json_mapping_file(
+        column_to_terms, join(str(tmp_path), "nidm_annotations.json"), True
+    )
+
+    # run csv2nidm and check nidm file for accuracy
+    # Manually constructed argument dictionary
+    arg_dict = {
+        "csv_file": join(tmp_path, "data.csv"),
+        "json_map": join(str(tmp_path), "nidm_annotations.json"),
+        "no_concepts": True,
+        "redcap": False,
+        "nidm_file": False,
+        "dataset_identifier": False,
+        "output_file": join(str(tmp_path), "test_csv2nidm.ttl"),
+    }
+
+    # Convert the dictionary to a Namespace object or use **arg_dict
+    class Namespace:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    args = Namespace(**arg_dict)
+    csv2nidm_main(args=args)
 
 
 def test_map_vars_to_terms_BIDS(setup: Setup, tmp_path: Path) -> None:

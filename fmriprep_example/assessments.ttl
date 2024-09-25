@@ -1,0 +1,244 @@
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix ilx: <http://uri.interlex.org/> .
+@prefix nfo: <http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#> .
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix niiri: <http://iri.nidash.org/> .
+@prefix onli: <http://neurolog.unice.fr/ontoneurolog/v3.0/instrument.owl#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+niiri:IQ_22a6hej a nidm:PersonalDataElement,
+        prov:Entity ;
+    rdfs:label "IQ" ;
+    dct:description "IQ" ;
+    nidm:isAbout <https://www.cognitiveatlas.org/concept/id/trm_4a3fd79d0a666> ;
+    nidm:sourceVariable "IQ" ;
+    ilx:ilx_0739289 "NIDM" .
+
+niiri:aed1107e-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:fed10e4e-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed158f4-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ded156ec-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ced13612-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ced133ec-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded04b6c-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:bed04770-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded08276-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ced08014-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0ada0-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ded0ab5c-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0c5ce-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:fed0c39e-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0d758-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:eed0d532-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0e8d8-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:bed0e6b2-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed122d0-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:aed120be-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed09932-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ded09702-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed0fa94-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:bed0f86e-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed147ec-6564-11ef-bef2-b6413a7a76c1 a onli:assessment-instrument,
+        nidm:AcquisitionObject,
+        prov:Entity ;
+    nfo:filename "assessments.tsv"^^xsd:string ;
+    prov:Location "file:/assessments.tsv"^^xsd:string ;
+    prov:wasGeneratedBy niiri:ded145d0-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:participant_id_15l2iu a nidm:PersonalDataElement,
+        prov:Entity ;
+    rdfs:label "participant_id" ;
+    dct:description "subject/participant identifier" ;
+    nidm:isAbout <https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id> ;
+    nidm:sourceVariable "participant_id" .
+
+niiri:aed0e46e-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:aed120be-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:fed11e66-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed04770-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:ded042a2-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed07d76-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed0e6b2-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:aed0e46e-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed0f86e-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:eed0f620-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed10c00-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:bed15462-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ced08014-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:bed07d76-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ced094dc-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ced133ec-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:eed13180-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded042a2-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded09702-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:ced094dc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded0ab5c-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:eed0a936-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded0d2f8-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded145d0-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:eed1435a-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:ded156ec-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:bed15462-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0a936-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0c16e-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0d532-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:ded0d2f8-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed0f620-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed13180-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:eed1435a-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed0c39e-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:eed0c16e-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed10e4e-6564-11ef-bef2-b6413a7a76c1 a onli:instrument-based-assessment,
+        nidm:Acquisition,
+        prov:Activity ;
+    dct:isPartOf niiri:bed10c00-6564-11ef-bef2-b6413a7a76c1 .
+
+niiri:fed11e66-6564-11ef-bef2-b6413a7a76c1 a nidm:Session,
+        prov:Activity ;
+    dct:isPartOf niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 .
+
+<https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id> a prov:Entity ;
+    rdfs:label "src_subject_id" .
+
+<https://www.cognitiveatlas.org/concept/id/trm_4a3fd79d0a666> a prov:Entity ;
+    rdfs:label "intelligence" .
+
+nidm:PersonalDataElement rdfs:subClassOf nidm:DataElement .
+
+niiri:becf7cdc-6564-11ef-bef2-b6413a7a76c1 a nidm:Project,
+        prov:Activity ;
+    nfo:filename "assessments.tsv"^^xsd:string .
