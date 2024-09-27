@@ -368,6 +368,7 @@ def GetAcquisitionEntityFromSubjectSessionTaskRun(
                 prefix prov: <http://www.w3.org/ns/prov#>
                 prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
                 prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+                prefix sio: <http://semanticscience.org/ontology/sio.owl#>
 
                 select distinct ?acq_activity ?acq_entity
 
@@ -409,6 +410,7 @@ def GetAcquisitionEntityFromSubjectSessionTask(
                 prefix prov: <http://www.w3.org/ns/prov#>
                 prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
                 prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+                prefix sio: <http://semanticscience.org/ontology/sio.owl#>
 
                 select distinct ?acq_activity ?acq_entity
 
@@ -449,6 +451,7 @@ def GetAcquisitionEntityFromSubjectSessionRun(
                 prefix prov: <http://www.w3.org/ns/prov#>
                 prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
                 prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+                prefix sio: <http://semanticscience.org/ontology/sio.owl#>
 
                 select distinct ?acq_activity ?acq_entity
 
@@ -486,6 +489,7 @@ def GetParticipantUUIDFromSubjectID(nidm_file_list, subject_id):
                     prefix prov: <http://www.w3.org/ns/prov#>
                     prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
                     prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+                    prefix sio: <http://semanticscience.org/ontology/sio.owl#>
 
                     select distinct ?person_uuid
 

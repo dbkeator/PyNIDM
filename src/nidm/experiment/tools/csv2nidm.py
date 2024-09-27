@@ -137,6 +137,9 @@ def match_acquistion_task_run_from_session(
     :return: Returns UUID of acquisition activity and entity matching task and run
     """
 
+    derivative_acq_entity = None
+    acquisition_act = None
+
     # if session_uuid, task, and run are all specified then we can simply find the acquisition entity directly
     # and be done otherwise we have to iteratively search
     if (session_uuid is not None) and (task is not None) and (run is not None):
