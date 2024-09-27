@@ -351,6 +351,186 @@ def GetAcquisitionEntityMetadataFromSession(nidm_file_list, session_uuid):
     return df
 
 
+def GetAcquisitionEntityFromSubjectSessionTaskRun(
+    nidm_file_list, subject_id, session_uuid, task, run
+):
+    """
+    This function will return the acquisition entity that is linked to
+    the session_uuid for subject_id and contains the metadata specified in task and run parameters
+    :return: dataframe with acquisition entity uuid
+    """
+
+    query = f"""
+
+                prefix nidm: <http://purl.org/nidash/nidm#>
+                prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                prefix dct: <http://purl.org/dc/terms/>
+                prefix prov: <http://www.w3.org/ns/prov#>
+                prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                select distinct ?acq_activity ?acq_entity
+
+                where {{
+                        ?acq_activity dct:isPartOf <{session_uuid}> ;
+                            prov:qualifiedAssociation _:blanknode .
+
+                         _:blanknode prov:hadRole {Constants.NIDM_PARTICIPANT} ;
+                            prov:agent ?uuid  .
+
+                        ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
+
+                        ?acq_entity prov:wasGeneratedBy ?acq_activity ;
+                            nidm:AcquisitionObject {run} ;
+                            nidm:Task "{task}"^^xsd:string .
+                }}
+
+            """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetAcquisitionEntityFromSubjectSessionTask(
+    nidm_file_list, subject_id, session_uuid, task
+):
+    """
+    This function will return the acquisition entity that is linked to
+    the session_uuid and contains the metadata specified in the task parameter
+    :return: dataframe with acquisition entity uuid
+    """
+
+    query = f"""
+
+                prefix nidm: <http://purl.org/nidash/nidm#>
+                prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                prefix dct: <http://purl.org/dc/terms/>
+                prefix prov: <http://www.w3.org/ns/prov#>
+                prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                select distinct ?acq_activity ?acq_entity
+
+                where {{
+                        ?acq_activity dct:isPartOf <{session_uuid}> ;
+                            prov:qualifiedAssociation _:blanknode .
+
+                         _:blanknode prov:hadRole {Constants.NIDM_PARTICIPANT} ;
+                            prov:agent ?uuid  .
+
+                        ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
+
+                        ?acq_entity prov:wasGeneratedBy ?acq_activity ;
+                            nidm:Task "{task}"^^xsd:string .
+                }}
+
+            """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetAcquisitionEntityFromSubjectSessionRun(
+    nidm_file_list, subject_id, session_uuid, run
+):
+    """
+    This function will return the acquisition entity that is linked to
+    the session_uuid for subject_id and contains the metadata specified in the run parameter
+    :return: dataframe with acquisition entity uuid
+    """
+
+    query = f"""
+
+                prefix nidm: <http://purl.org/nidash/nidm#>
+                prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                prefix dct: <http://purl.org/dc/terms/>
+                prefix prov: <http://www.w3.org/ns/prov#>
+                prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                select distinct ?acq_activity ?acq_entity
+
+                where {{
+                        ?acq_activity dct:isPartOf <{session_uuid}> ;
+                            prov:qualifiedAssociation _:blanknode .
+
+                         _:blanknode prov:hadRole {Constants.NIDM_PARTICIPANT} ;
+                            prov:agent ?uuid  .
+
+                        ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
+
+                        ?acq_entity prov:wasGeneratedBy ?acq_activity ;
+                            nidm:AcquisitionObject {run} .
+                }}
+
+            """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetParticipantUUIDFromSubjectID(nidm_file_list, subject_id):
+    """
+    This function will return the prov:Agent for the supplied subject_id
+    :return: dataframe with acquisition entity uuid
+    """
+
+    query = f"""
+
+                    prefix nidm: <http://purl.org/nidash/nidm#>
+                    prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    prefix dct: <http://purl.org/dc/terms/>
+                    prefix prov: <http://www.w3.org/ns/prov#>
+                    prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                    prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                    select distinct ?person_uuid
+
+                    where {{
+                            ?person_uuid rdf:type prov:Agent ;
+                                rdf:type prov:Person ;
+                                {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
+                    }}
+
+                """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
+def GetAcquisitionEntityMetadataFromUUID(nidm_file_list, entity_uuid):
+    """
+    This function will return all metadata from Acquisition entity metadata
+     for entity_uuid
+    :return: dataframe with acquisition metadata
+    """
+
+    query = f"""
+
+                prefix nidm: <http://purl.org/nidash/nidm#>
+                prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                prefix dct: <http://purl.org/dc/terms/>
+                prefix prov: <http://www.w3.org/ns/prov#>
+                prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+                prefix xsd: <http://www.w3.org/2001/XMLSchema#>
+
+                select distinct ?p ?o
+
+                where {{
+                        <{entity_uuid}> ?p ?o .
+                }}
+
+            """
+
+    df = sparql_query_nidm(nidm_file_list, query, output_file=None)
+
+    return df
+
+
 def GetProjectSessionsMetadata(nidm_file_list, project_uuid):
     query = f"""
 

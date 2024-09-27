@@ -27,10 +27,12 @@ from nidm.experiment import (
     Session,
 )
 from nidm.experiment.Query import (
-    GetAcquisitionEntityMetadataFromSession,
+    GetAcquisitionEntityFromSubjectSessionRun,
+    GetAcquisitionEntityFromSubjectSessionTask,
+    GetAcquisitionEntityFromSubjectSessionTaskRun,
     GetParticipantIDs,
     GetParticipantSessionsMetadata,
-    GetSessionUUID,
+    GetParticipantUUIDFromSubjectID,
 )
 from nidm.experiment.Utils import (
     add_attributes_with_cde,
@@ -109,7 +111,7 @@ def find_session_for_subjectid(session_num, subjectid, nidm_file):
     session_metadata = GetParticipantSessionsMetadata([nidm_file], subjectid)
 
     # find session number matching session provided in args.csv_file
-    # initially set derivative_sesion to None in case we don't find it
+    # initially set derivative_session to None in case we don't find it
     derivative_session = None
     for _, row in session_metadata.iterrows():
         # csv_row is the current row being processed.  Check the session_number against the ses column
@@ -122,7 +124,9 @@ def find_session_for_subjectid(session_num, subjectid, nidm_file):
     return derivative_session
 
 
-def match_acquistion_task_run_from_session(session_uuid, task, run, nidm_file):
+def match_acquistion_task_run_from_session(
+    subject_id, session_uuid, task, run, nidm_file
+):
     """
     This function will use the supplied session_uuid from the NIDM file and find the acquisition entity with
     metadata matching the supplied task.
@@ -133,107 +137,101 @@ def match_acquistion_task_run_from_session(session_uuid, task, run, nidm_file):
     :return: Returns UUID of acquisition activity and entity matching task and run
     """
 
-    # if session_uuid is None because user didn't supply a session number in the CSV file
-    # implying there was no session number in the BIDS dataset, we have to search across all
-    # sessions to find the one that contains the task and/or run matching what the user
-    # supplied.
-    if session_uuid is None:
-        session_act = GetSessionUUID([nidm_file])
-        for _, session_uuid in session_act.iterrows():
-            # now get acquisition metadata linked to the identified session
-            acquisition_metadata = GetAcquisitionEntityMetadataFromSession(
-                [nidm_file], session_uuid["ses_act"]
-            )
-
-            # set derivative_image_entity to None in case we can't find an acquisition entity for the supplied task
-            derivative_acq_entity = None
-            acquisition_act = None
-
-            # if a valid task name was supplied to this function
-            if task is not None:
-                for _, task_row in acquisition_metadata.iterrows():
-                    # check tasks match for this acquisition and if so, assume it's the correct
-                    # acquisition used in the derivative data
-                    if str(task_row["o"]) == task:
-                        # if a valid run number was supplied to this function
-                        if run is not None:
-                            for _, run_row in acquisition_metadata.iterrows():
-                                # if run in this acquisition entity matching task
-                                if run_row["o"] != run:
-                                    # wrong acquisition entity so set to None
-                                    derivative_acq_entity = None
-
-                                else:
-                                    derivative_acq_entity = run_row["acq_entity"]
-                                    acquisition_act = run_row["acq_activity"]
-                                    break
-                        # no run number provided so assume matching task is correct acquistion entity
-                        else:
-                            derivative_acq_entity = task_row["acq_entity"]
-                            acquisition_act = task_row["acq_activity"]
-                            break
-
-            else:
-                # maybe they supplied a run and not the task so we now try and match by run only
-                # if a valid run number was supplied to this function
-                if run is not None:
-                    for _, run_row in acquisition_metadata.iterrows():
-                        # if run in this acquisition entity matching task
-                        if run_row["o"] != run:
-                            # wrong acquisition entity so set to None
-                            derivative_acq_entity = None
-
-                        else:
-                            derivative_acq_entity = run_row["acq_entity"]
-                            acquisition_act = run_row["acq_activity"]
-                            break
-
-    # if user supplied session number to csv2nidm in CSV files, we can then use the session_uuid
-    # directly that corresponds to that session number
-    else:
-        acquisition_metadata = GetAcquisitionEntityMetadataFromSession(
-            [nidm_file], session_uuid
+    # if session_uuid, task, and run are all specified then we can simply find the acquisition entity directly
+    # and be done otherwise we have to iteratively search
+    if (session_uuid is not None) and (task is not None) and (run is not None):
+        acq_entity = GetAcquisitionEntityFromSubjectSessionTaskRun(
+            nidm_file_list=[nidm_file],
+            subject_id=subject_id,
+            session_uuid=session_uuid,
+            run=run,
+            task=task,
         )
 
-        # set derivative_image_entity to None in case we can't find an acquisition entity for the supplied task
-        derivative_acq_entity = None
-        acquisition_act = None
+        for _, acq in acq_entity.iterrows():
+            derivative_acq_entity = acq["acq_entity"]
+            acquisition_act = acq["acq_activity"]
+            break
 
-        # if a valid task name was supplied to this function
-        if task is not None:
-            for _, task_row in acquisition_metadata.iterrows():
-                # check tasks match for this acquisition and if so, assume it's the correct
-                # acquisition used in the derivative data
-                if str(task_row["o"]) == task:
-                    # if a valid run number was supplied to this function
-                    if run is not None:
-                        for _, run_row in acquisition_metadata.iterrows():
-                            # if run in this acquisition entity matching task
-                            if run_row["o"] != run:
-                                # wrong acquisition entity so set to None
-                                derivative_acq_entity = None
+    # user supplied session_uuid, a run, and not task
+    elif (session_uuid is not None) and (task is None) and (run is not None):
+        acq_entity = GetAcquisitionEntityFromSubjectSessionRun(
+            nidm_file_list=[nidm_file],
+            subject_id=subject_id,
+            session_uuid=session_uuid,
+            run=run,
+        )
+        for _, acq in acq_entity.iterrows():
+            derivative_acq_entity = acq["acq_entity"]
+            acquisition_act = acq["acq_activity"]
+            break
 
-                            else:
-                                derivative_acq_entity = run_row["acq_entity"]
-                                acquisition_act = run_row["acq_activity"]
-                    # no run number provided so assume matching task is correct acquistion entity
-                    else:
-                        derivative_acq_entity = task_row["acq_entity"]
-                        acquisition_act = task_row["acq_activity"]
+    # user supplied session_uuid, a task, and not run
+    elif (session_uuid is not None) and (task is not None) and (run is None):
+        acq_entity = GetAcquisitionEntityFromSubjectSessionTask(
+            nidm_file_list=[nidm_file],
+            subject_id=subject_id,
+            session_uuid=session_uuid,
+            task=task,
+        )
+        for _, acq in acq_entity.iterrows():
+            derivative_acq_entity = acq["acq_entity"]
+            acquisition_act = acq["acq_activity"]
+            break
 
-        else:
-            # maybe they supplied a run and not the task so we now try and match by run only
-            # if a valid run number was supplied to this function
-            if run is not None:
-                for _, run_row in acquisition_metadata.iterrows():
-                    # if run in this acquisition entity matching task
-                    if run_row["o"] != run:
-                        # wrong acquisition entity so set to None
-                        derivative_acq_entity = None
+    # if session_uuid is None because user didn't supply a session number in the CSV file
+    # implying there was no session number in the BIDS dataset for this task/run, we have to search across all
+    # sessions to find the one that contains the task and/or run matching what the user
+    # supplied.
+    elif session_uuid is None:
+        # get session_uuids and metadata for this subject_id
+        session_act = GetParticipantSessionsMetadata([nidm_file], subject_id)
+        # session_act = GetSessionUUID([nidm_file])
 
-                    else:
-                        derivative_acq_entity = run_row["acq_entity"]
-                        acquisition_act = run_row["acq_activity"]
+        # for session, get linked acquisition entities and search for the supplied
+        # task and run
+        for _, session in session_act.iterrows():
+            # if session_uuid, task, and run are all specified then we can simply find the acquisition entity directly
+            # and be done otherwise we have to iteratively search
+            if (task is not None) and (run is not None):
+                acq_entity = GetAcquisitionEntityFromSubjectSessionTaskRun(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session["session_uuid"],
+                    run=run,
+                    task=task,
+                )
+
+                for _, acq in acq_entity.iterrows():
+                    derivative_acq_entity = acq["acq_entity"]
+                    acquisition_act = acq["acq_activity"]
+                    break
+
+            # user supplied session_uuid, a run, and not task
+            elif (task is None) and (run is not None):
+                acq_entity = GetAcquisitionEntityFromSubjectSessionRun(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session["session_uuid"],
+                    run=run,
+                )
+                for _, acq in acq_entity.iterrows():
+                    derivative_acq_entity = acq["acq_entity"]
+                    acquisition_act = acq["acq_activity"]
+                    break
+
+            # user supplied session_uuid, a task, and not run
+            elif (task is not None) and (run is None):
+                acq_entity = GetAcquisitionEntityFromSubjectSessionTask(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session["session_uuid"],
+                    task=task,
+                )
+                for _, acq in acq_entity.iterrows():
+                    derivative_acq_entity = acq["acq_entity"]
+                    acquisition_act = acq["acq_activity"]
+                    break
 
     return derivative_acq_entity, acquisition_act
 
@@ -559,304 +557,255 @@ def csv2nidm_main(args=None):
         #            }"""
         # qres = rdf_graph.query(query)
 
-        for _, row in qres.iterrows():
-            if args.logfile:
-                logging.info("participant in NIDM file " + row[0] + "\t" + row[1])
-            else:
-                print(f"participant in NIDM file {row[0]} \t {row[1]}")
-            # find row in CSV file with subject id matching agent from NIDM file
+        # iterate over rows of csv file
+        for _, df_row in df.iterrows():
+            # see if this participant ID is in the NIDM file
+            found_subject = False
 
-            # find row in CSV file with matching subject id to the agent in the NIDM file
-            # be careful about data types...simply type-change dataframe subject id column and query to strings.
-            # here we're removing the leading 0's from IDs because pandas.read_csv strips those unless you know ahead of
-            # time which column is the subject id....
-            csv_row = df.loc[
-                df[id_field].astype("str").str.contains(str(row[1]).lstrip("0"))
-            ]
-
-            # if there was data about this subject in the NIDM file already (i.e. an agent already exists with this subject id)
-            # then add this CSV assessment (or derivative) data to NIDM file, else skip it....
-            if len(csv_row.index) != 0:
-                if args.logfile:
-                    logging.info("found participant in CSV file")
-                else:
-                    print("found participant in CSV file")
-
-                # added to support derivatives
-                if args.derivative:
-                    # here we need to locate the session with bids:session_number equal to ses_task_run_df['ses'] for
-                    # this subject and then the acquisition with 'task' and optional 'run' so we can link the derivatives
-                    # to these data.  If all ('ses','run','task') are blank then we simply create a new session and
-                    # continue
-
-                    # get sessions list from csv_row.  Note, there should only be 1 entry with this subject
-                    # ID in the input (args.csv_file).  If there are multiple with the same subject ID then
-                    # we'll error out.
-                    temp = csv_row["ses"].to_list()
-                    if len(temp) > 1:
-                        if args.logfile:
-                            logging.error(
-                                "In looking for session, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        else:
-                            print(
-                                "In looking for session, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        exit(1)
+            # search all subject ids in nidm file for one referenced in csv file
+            for _, row in qres.iterrows():
+                if str(row[1]).lstrip("0") in df_row[id_field]:
+                    found_subject = True
+                    if args.logfile:
+                        logging.info("found participant in CSV file")
                     else:
-                        # store session number from csv_row for later use
-                        session_num = "".join(map(str, temp))
-                        # check if session_num is empty and if so, set to None
-                        # since we converted to a string we'll use string comparisons for 'nan'
-                        if session_num == "nan":
-                            session_num = None
+                        print("found participant in CSV file")
+                    break
 
-                    # now find session NIDM object for this subject
-                    derivative_session = find_session_for_subjectid(
-                        session_num, str(row[1]).lstrip("0"), args.nidm_file
+            # if the subject in CSV file isn't found in supplied nidm file then skip adding this derivative
+            # information
+            if not found_subject:
+                break
+
+            # find prov:Person associated with df_row[id_field]
+            subject_uuid = GetParticipantUUIDFromSubjectID(
+                nidm_file_list=[args.nidm_file],
+                subject_id=df_row[id_field].lstrip("0"),
+            )
+
+            # added to support derivatives
+            if args.derivative:
+                # here we need to locate the session with bids:session_number equal to ses_task_run_df['ses'] for
+                # this subject and then the acquisition with 'task' and optional 'run' so we can link the derivatives
+                # to these data.  If all ('ses','run','task') are blank then we simply create a new session and
+                # continue
+
+                # get session number for this csv row
+                session_num = df_row["ses"]
+
+                # check if session_num is empty and if so, set to None
+                # since we converted to a string we'll use string comparisons for 'nan'
+                if str(session_num) == "nan":
+                    session_num = None
+
+                # now find session NIDM object for this subject
+                derivative_session = find_session_for_subjectid(
+                    session_num, str(df_row[id_field]).lstrip("0"), args.nidm_file
+                )
+
+                # get task from current csv row
+                task = str(df_row["task"])
+
+                # check if task is empty and if so, set to None
+                if task == "nan":
+                    task = None
+
+                # get run from current csv row
+                run = str(df_row["run"])
+
+                # check if run is empty and if so, set to None
+                if run == "nan":
+                    run = None
+
+                # now find acquisition entity matching the supplied task
+                (
+                    source_acq_entity,
+                    source_activity,
+                ) = match_acquistion_task_run_from_session(
+                    subject_id=str(df_row[id_field]).lstrip("0"),
+                    session_uuid=derivative_session,
+                    task=task,
+                    run=run,
+                    nidm_file=args.nidm_file,
+                )
+
+                # check if we have a valid derivative_session, if so, use it.  If not, then skip this
+                # derived entry
+
+                if source_acq_entity is not None:
+                    # add namespace for derived data software
+                    project.addNamespace(
+                        project.safe_string(
+                            software_metadata["title"].to_string(index=False)
+                        ),
+                        software_metadata["url"].to_string(index=False),
                     )
 
-                    # get task list from args.csv_file for the
-                    # subject currently being processed
-                    temp = csv_row["task"].to_list()
-                    if len(temp) > 1:
-                        if args.logfile:
-                            logging.error(
-                                "In looking for task, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        else:
-                            print(
-                                "In looking for task, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        exit(1)
-                    else:
-                        task = "".join(map(str, temp))
-
-                        # check if task is empty and if so, set to None
-                        if task == "nan":
-                            task = None
-
-                    # get run list from args.csv_file for the
-                    # subject currently being processed
-                    temp = csv_row["run"].to_list()
-                    if len(temp) > 1:
-                        if args.logfile:
-                            logging.error(
-                                "In looking for run, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        else:
-                            print(
-                                "In looking for run, more than one entry in -csv (CSV file) supplied has "
-                                "the same subject ID.  This is not supported!"
-                            )
-                        exit(1)
-                    else:
-                        run = "".join(map(str, temp))
-
-                        # check if run is empty and if so, set to None
-                        if run == "nan":
-                            run = None
-
-                    # now find acquisition entity matching the supplied task
-                    (
-                        source_acq_entity,
-                        source_activity,
-                    ) = match_acquistion_task_run_from_session(
-                        derivative_session, task, run, args.nidm_file
+                    # create a derivative activity
+                    der = Derivative(
+                        project=project,
                     )
 
-                    # check if we have a valid derivative_session, if so, use it.  If not, then skip this
-                    # derived entry
+                    # create a derivative entity
+                    der_entity = DerivativeObject(derivative=der)
 
-                    if source_acq_entity is not None:
-                        # add namespace for derived data software
-                        project.addNamespace(
-                            project.safe_string(
-                                software_metadata["title"].to_string(index=False)
-                            ),
-                            software_metadata["url"].to_string(index=False),
-                        )
+                    # add metadata to der_entity
 
-                        # create a namespace for this derivative software
-                        # soft_namespace = Namespace(software_metadata['title'])
-
-                        # create agent for this derivative software
-                        # add_person(self, uuid=None, attributes=None, add_default_type=True)
-                        # can use 'add_person' function here which adds an agent, set add_default_type to False
-                        # so it doesn't add the type prov:Person and instead we can add the software metadata
-                        # soft_agent = project.add_person(attributes=({}),add_default_type=False)
-
-                        # create a derivative activity
-                        der = Derivative(
-                            project=project,
-                        )
-
-                        # create agent for software tool and metadata
-                        # der.add_attributes({Constants.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE:})
-
-                        # create a derivative entity
-                        der_entity = DerivativeObject(derivative=der)
-
-                        # add metadata to der_entity
-
-                        # store other data from row with columns_to_term mappings
-                        for row_variable in csv_row:
-                            # check if row_variable is subject id, if so skip it
-                            if (row_variable == id_field) or (
-                                row_variable in ["ses", "task", "run"]
-                            ):
-                                continue
-                            else:
-                                if not csv_row[row_variable].values[0]:
-                                    continue
-
+                    # store other data from row with columns_to_term mappings
+                    for row_variable in df_row.keys():
+                        # check if row_variable is subject id, if so skip it
+                        if (row_variable == id_field) or (
+                            row_variable in ["ses", "task", "run"]
+                        ):
+                            continue
+                        else:
+                            # check that the df_row[row_variable] contains some data/metadata, if so
+                            # add to nidm file, if not skip it.
+                            if str(df_row[row_variable]) != "nan":
                                 add_attributes_with_cde(
                                     der_entity,
                                     cde,
                                     row_variable,
-                                    Literal(csv_row[row_variable].values[0]),
+                                    Literal(df_row[row_variable]),
                                 )
-                        # link derivative activity to derivative_acq_entity with prov:used
-                        namespace, name = split_uri(source_activity)
+                    # link derivative activity to derivative_acq_entity with prov:used
+                    namespace, name = split_uri(source_activity)
 
-                        # find niiri namespace in project
-                        niiri_ns = project.find_namespace_with_uri(str(Constants.NIIRI))
+                    # find niiri namespace in project
+                    niiri_ns = project.find_namespace_with_uri(str(Constants.NIIRI))
 
-                        der.add_attributes(
-                            {Constants.PROV["used"]: QualifiedName(niiri_ns, name)}
-                        )
+                    der.add_attributes(
+                        {Constants.PROV["used"]: QualifiedName(niiri_ns, name)}
+                    )
 
-                        # add cmdline and platform to derivative activity
-                        der.add_attributes(
-                            {
-                                software_metadata["url"].to_string(index=False)
-                                + "cmdline": software_metadata["cmdline"].to_string(
-                                    index=False
-                                ),
-                                software_metadata["url"].to_string(index=False)
-                                + "platform": software_metadata["platform"].to_string(
-                                    index=False
-                                ),
-                            }
-                        )
+                    # add cmdline and platform to derivative activity
+                    der.add_attributes(
+                        {
+                            software_metadata["url"].to_string(index=False)
+                            + "cmdline": software_metadata["cmdline"].to_string(
+                                index=False
+                            ),
+                            software_metadata["url"].to_string(index=False)
+                            + "platform": software_metadata["platform"].to_string(
+                                index=False
+                            ),
+                        }
+                    )
 
-                        # create software metadata agent
+                    # create software metadata agent
 
-                        # find nidm namespace
-                        nidm_ns = project.find_namespace_with_uri(str(Constants.NIDM))
+                    # find nidm namespace
+                    nidm_ns = project.find_namespace_with_uri(str(Constants.NIDM))
 
-                        software_agent = project.add_person(
-                            attributes={
-                                RDF["type"]: QualifiedName(nidm_ns, "SoftwareAgent")
-                            },
-                            add_default_type=False,
-                        )
+                    software_agent = project.add_person(
+                        attributes={
+                            RDF["type"]: QualifiedName(nidm_ns, "SoftwareAgent")
+                        },
+                        add_default_type=False,
+                    )
 
-                        # add qualified association with subject
+                    # add qualified association with subject
 
-                        # find sio namespace in project
+                    # find sio namespace in project
+                    sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
+
+                    # if we need to add this namespace
+                    if sio_ns is False:
+                        # add sio namespace
+                        project.addNamespace(prefix="sio", uri=str(Constants.SIO))
+
                         sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
 
-                        # if we need to add this namespace
-                        if sio_ns is False:
-                            # add dcmitype namespace
-                            project.addNamespace(prefix="sio", uri=str(Constants.SIO))
+                    der.add_qualified_association(
+                        person=subject_uuid["person_uuid"][0],
+                        role=QualifiedName(sio_ns, "Subject"),
+                    )
 
-                            sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
+                    # add qualified association with software agent
+                    # would prefer to use Constants.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE here as the role
+                    # but Constants.py has that as a rdflib Namespace but here we're adding data to a provDocument
+                    # so using prov's QualifiedName and can't figure out how to convert rdflib Namespace to a prov
+                    # qualified name...probably a matter of parsing the uri into two parts, one for prefix and the
+                    # other for uri for prov QualifiedName function.
+                    namespace, name = split_uri(
+                        Constants.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE
+                    )
+                    der.add_qualified_association(
+                        person=software_agent,
+                        role=QualifiedName(nidm_ns, name),
+                    )
+                    # add software metadata to software_agent
+                    # uri:"http://ncitt.ncit.nih.gov/", prefix:"ncit", term:"age", value:15
+                    # project.addAttributesWithNamespaces(software_agent,[{"uri":Constants.DCTYPES,
+                    #                                "prefix": "dctypes", "term": "title","value":
+                    #                                    software_metadata["title"].to_string(index=False)}])
 
-                        der.add_qualified_association(
-                            person=row[0], role=QualifiedName(sio_ns, "Subject")
+                    # see if namespace for dcmitype exists, if not add it
+                    # add namespaces to prov graph
+                    dcmitype_ns = project.find_namespace_with_uri(
+                        str(Constants.DCTYPES)
+                    )
+
+                    # if we need to add this namespace
+                    if dcmitype_ns is False:
+                        # add dcmitype namespace
+                        project.addNamespace(
+                            prefix="dcmitype", uri=str(Constants.DCTYPES)
                         )
 
-                        # add qualified association with software agent
-                        # would prefer to use Constants.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE here as the role
-                        # but Constants.py has that as a rdflib Namespace but here we're adding data to a provDocument
-                        # so using prov's QualifiedName and can't figure out how to convert rdflib Namespace to a prov
-                        # qualified name...probably a matter of parsing the uri into two parts, one for prefix and the
-                        # other for uri for prov QualifiedName function.
-                        namespace, name = split_uri(
-                            Constants.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE
-                        )
-                        der.add_qualified_association(
-                            person=software_agent,
-                            role=QualifiedName(nidm_ns, name),
-                        )
-                        # add software metadata to software_agent
-                        # uri:"http://ncitt.ncit.nih.gov/", prefix:"ncit", term:"age", value:15
-                        # project.addAttributesWithNamespaces(software_agent,[{"uri":Constants.DCTYPES,
-                        #                                "prefix": "dctypes", "term": "title","value":
-                        #                                    software_metadata["title"].to_string(index=False)}])
-
-                        # see if namespace for dcmitype exists, if not add it
-                        # add namespaces to prov graph
                         dcmitype_ns = project.find_namespace_with_uri(
                             str(Constants.DCTYPES)
                         )
 
-                        # if we need to add this namespace
-                        if dcmitype_ns is False:
-                            # add dcmitype namespace
-                            project.addNamespace(
-                                prefix="dcmitype", uri=str(Constants.DCTYPES)
-                            )
+                    project.addAttributes(
+                        software_agent,
+                        {
+                            QualifiedName(dcmitype_ns, "title"): software_metadata[
+                                "title"
+                            ].to_string(index=False)
+                        },
+                    )
 
-                            dcmitype_ns = project.find_namespace_with_uri(
-                                str(Constants.DCTYPES)
-                            )
+                    # check if dct namespace needs to be added
+                    dct_ns = project.find_namespace_with_uri(str(Constants.DCT))
 
-                        project.addAttributes(
-                            software_agent,
-                            {
-                                QualifiedName(dcmitype_ns, "title"): software_metadata[
-                                    "title"
-                                ].to_string(index=False)
-                            },
-                        )
+                    # if we need to add this namespace
+                    if dct_ns is False:
+                        # add dcmitype namespace
+                        project.addNamespace(prefix="dct", uri=str(Constants.DCT))
 
-                        # check if dct namespace needs to be added
                         dct_ns = project.find_namespace_with_uri(str(Constants.DCT))
 
-                        # if we need to add this namespace
-                        if dct_ns is False:
-                            # add dcmitype namespace
-                            project.addNamespace(prefix="dct", uri=str(Constants.DCT))
-
-                            dct_ns = project.find_namespace_with_uri(str(Constants.DCT))
-
-                        project.addAttributes(
-                            software_agent,
-                            {
-                                QualifiedName(dct_ns, "description"): software_metadata[
-                                    "description"
-                                ].to_string(index=False),
-                                QualifiedName(dct_ns, "hasVersion"): software_metadata[
-                                    "version"
-                                ].to_string(index=False),
-                                QualifiedName(sio_ns, "URL"): software_metadata[
-                                    "url"
-                                ].to_string(index=False),
-                            },
-                        )
-
-                else:
-                    # create a new session for this assessment
-                    new_session = Session(project=project)
+                    project.addAttributes(
+                        software_agent,
+                        {
+                            QualifiedName(dct_ns, "description"): software_metadata[
+                                "description"
+                            ].to_string(index=False),
+                            QualifiedName(dct_ns, "hasVersion"): software_metadata[
+                                "version"
+                            ].to_string(index=False),
+                            QualifiedName(sio_ns, "URL"): software_metadata[
+                                "url"
+                            ].to_string(index=False),
+                        },
+                    )
 
                 # if this isn't derivative data...
                 if not args.derivative:
                     # add an assessment acquisition for the phenotype data to session and associate with agent
                     # acq=AssessmentAcquisition(session=nidm_session)
+
+                    # create a new session for this assessment
+                    new_session = Session(project=project)
+
                     acq = AssessmentAcquisition(session=new_session)
                     # add acquisition entity for assessment
                     acq_entity = AssessmentObject(acquisition=acq)
                     # add qualified association with existing agent
                     acq.add_qualified_association(
-                        person=row[0], role=Constants.NIDM_PARTICIPANT
+                        person=subject_uuid["person_uuid"][0],
+                        role=Constants.NIDM_PARTICIPANT,
                     )
 
                     # add git-annex info if exists
@@ -878,20 +827,18 @@ def csv2nidm_main(args=None):
                     )
 
                     # store other data from row with columns_to_term mappings
-                    for row_variable in csv_row:
+                    for row_variable in df_row:
                         # check if row_variable is subject id, if so skip it
                         if row_variable == id_field:
                             continue
                         else:
-                            if not csv_row[row_variable].values[0]:
-                                continue
-
-                            add_attributes_with_cde(
-                                acq_entity,
-                                cde,
-                                row_variable,
-                                csv_row[row_variable].values[0],
-                            )
+                            if str(df_row[row_variable]) != "nan":
+                                add_attributes_with_cde(
+                                    acq_entity,
+                                    cde,
+                                    row_variable,
+                                    Literal(df_row[row_variable]),
+                                )
 
                     continue
         if args.logfile:
@@ -966,13 +913,14 @@ def csv2nidm_main(args=None):
                     ):
                         continue
 
-                    # add data for this variable to derivative entity
-                    add_attributes_with_cde(
-                        der_entity,
-                        cde,
-                        row_variable,
-                        Literal(row_data),
-                    )
+                    if str(row_data) != "nan":
+                        # add data for this variable to derivative entity
+                        add_attributes_with_cde(
+                            der_entity,
+                            cde,
+                            row_variable,
+                            Literal(row_data),
+                        )
 
                 # add cmdline and platform to derivative activity
                 der.add_attributes(
