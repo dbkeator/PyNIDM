@@ -453,18 +453,23 @@ def read_nidm(nidmDoc):
             else:
                 # what do we do here with some uri which we don't have an existing prefix?
                 # we'll just create one using 'der' string for derivative stuff and a random number
-                prefix = "der_" + getUUID()
+                # prefix = "der_" + getUUID()
 
                 # now add namespace
-                project.addNamespace(prefix=prefix, uri=str(ns))
+                # project.addNamespace(prefix=prefix, uri=str(ns))
 
-                term_ns = project.find_namespace_with_uri(str(ns))
+                # term_ns = project.find_namespace_with_uri(str(ns))
 
-                # now use this new namespace identifier for term
                 project.graph.entity(
-                    pm.QualifiedName(term_ns, term),
+                    pm.QualifiedName(provNamespace(None, str(row2[0])), ""),
                     {pm.QualifiedName(rdfs_ns, "label"): row2[1]},
                 )
+
+                # now use this new namespace identifier for term
+                # project.graph.entity(
+                #    pm.QualifiedName(term_ns, term),
+                #    {pm.QualifiedName(rdfs_ns, "label"): row2[1]},
+                # )
 
     # check for Derivatives.
     # WIP: Currently FSL, Freesurfer, and ANTS tools add these derivatives as nidm:FSStatsCollection,
@@ -538,9 +543,9 @@ def find_in_namespaces(search_uri, namespaces):
 
     for uris in namespaces:
         if uris.uri == search_uri:
-            return uris
+            return True, uris
 
-    return False
+    return False, None
 
 
 def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
@@ -559,17 +564,17 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
         # if this isn't a qualified association, add triples
         if predicate != URIRef(Constants.PROV["qualifiedAssociation"]):
             # make predicate a qualified name
-            obj_nm, obj_term = split_uri(predicate)
-            found_uri = find_in_namespaces(
-                search_uri=URIRef(obj_nm), namespaces=namespaces
+            pred_nm, pred_term = split_uri(predicate)
+            found_uri, found_nm = find_in_namespaces(
+                search_uri=URIRef(pred_nm), namespaces=namespaces
             )
             # if obj_nm is not in namespaces then it must just be part of some URI in the triple
             # so just add it as a prov.Identifier..note, prov and xsd namespaces automatically added from
             # inheritance of provDocument
             if (
                 (not found_uri)
-                and (obj_nm != Constants.PROV)
-                and (obj_nm != Constants.XSD)
+                and (pred_nm != Constants.PROV)
+                and (pred_nm != Constants.XSD)
             ):
                 predicate = pm.QualifiedName(
                     namespace=Namespace(str(predicate)), localpart=""
@@ -597,7 +602,10 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         nidm_obj.add_attributes(
                             {
                                 predicate: QualifiedName(
-                                    localpart=obj_term, namespace=Constants.PROV
+                                    localpart=obj_term,
+                                    namespace=provNamespace(
+                                        "prov", str(Constants.PROV)
+                                    ),
                                 )
                             }
                         )
@@ -606,7 +614,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                     #        {predicate: pm.QualifiedName(namespace=Namespace(obj_nm), localpart=obj_term)}
                     #    )
                     else:
-                        found_uri = find_in_namespaces(
+                        found_uri, found_nm = find_in_namespaces(
                             search_uri=URIRef(obj_nm), namespaces=namespaces
                         )
                         # if obj_nm is not in namespaces then it must just be part of some URI in the triple
@@ -616,7 +624,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         # else add as explicit prov.QualifiedName because it's easier to read
                         else:
                             nidm_obj.add_attributes(
-                                {predicate: pm.QualifiedName(found_uri, obj_term)}
+                                {predicate: pm.QualifiedName(found_nm, obj_term)}
                             )
                 except Exception:
                     nidm_obj.add_attributes(
@@ -670,7 +678,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                                 person = obj
                     # create qualified names for objects
                     obj_nm, obj_term = split_uri(r_obj.identifier)
-                    found_uri = find_in_namespaces(
+                    found_uri, found_nm = find_in_namespaces(
                         search_uri=URIRef(obj_nm), namespaces=namespaces
                     )
                     # if obj_nm is not in namespaces then it must just be part of some URI in the triple
@@ -683,7 +691,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         )
                     else:
                         nidm_obj.add_qualified_association(
-                            person=person, role=pm.QualifiedName(found_uri, obj_term)
+                            person=person, role=pm.QualifiedName(found_nm, obj_term)
                         )
 
             # else it's an association with another agent which isn't a participant
@@ -708,7 +716,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         # create qualified names for objects
                         obj_nm, obj_term = split_uri(r_obj.identifier)
 
-                        found_uri = find_in_namespaces(
+                        found_uri, found_nm = find_in_namespaces(
                             search_uri=URIRef(obj_nm), namespaces=namespaces
                         )
                         # if obj_nm is not in namespaces then it must just be part of some URI in the triple
@@ -721,7 +729,7 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         else:
                             nidm_obj.add_qualified_association(
                                 person=generic_agent,
-                                role=pm.QualifiedName(found_uri, obj_term),
+                                role=pm.QualifiedName(found_nm, obj_term),
                             )
 
                     except Exception:

@@ -523,8 +523,8 @@ def csv2nidm_main(args=None):
         else:
             print("Reading NIDM file...")
         project = read_nidm(args.nidm_file)
-        # with open("/Users/dbkeator/Downloads/test.ttl","w", encoding="utf-8") as f:
-        #    f.write(project.serializeTurtle())
+        with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
+            f.write(project.serializeTurtle())
 
         id_field = detect_idfield(column_to_terms)
 
@@ -570,9 +570,13 @@ def csv2nidm_main(args=None):
                 if str(row[1]).lstrip("0") in df_row[id_field]:
                     found_subject = True
                     if args.logfile:
-                        logging.info("found participant in CSV file")
+                        logging.info(
+                            f"found participant {str(row[1]).lstrip('0')} in CSV file"
+                        )
                     else:
-                        print("found participant in CSV file")
+                        print(
+                            f"found participant {str(row[1]).lstrip('0')} in CSV file"
+                        )
                     break
 
             # if the subject in CSV file isn't found in supplied nidm file then skip adding this derivative
