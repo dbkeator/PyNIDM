@@ -51,7 +51,11 @@ class Derivative(pm.ProvActivity, Core):
                 )
         else:
             self._uuid = uuid
-            super().__init__(project.graph, pm.Identifier(uuid), attributes)
+            niiri_ns = project.find_namespace_with_uri(str(Constants.NIIRI))
+
+            super().__init__(
+                project.graph, pm.QualifiedName(niiri_ns, uuid), attributes
+            )
 
         project.graph._add_record(self)
 
@@ -87,7 +91,9 @@ class Derivative(pm.ProvActivity, Core):
         # add derivative object to self._derivatives list
         self._derivative_objects.extend([derivative_object])
         # create links in graph
-        self.graph.wasGeneratedBy(derivative_object, self)
+        self.graph.wasGeneratedBy(
+            "niiri:" + derivative_object.get_uuid(), "niiri:" + self.get_uuid()
+        )
 
     def get_derivative_objects(self):
         return self._derivative_objects

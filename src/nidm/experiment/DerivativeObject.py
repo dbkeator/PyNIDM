@@ -28,6 +28,7 @@ class DerivativeObject(pm.ProvEntity, Core):
         """
 
         if uuid is None:
+            self._uuid = getUUID()
             # since derivatives are likely added to an existing NIDM file, here we explicitly
             # check for the  NIIRI namespace and only add it if necessary...otherwise the
             # prefix gets duplicated and ends up with an _1 in the resulting NIDM file.
@@ -49,7 +50,12 @@ class DerivativeObject(pm.ProvEntity, Core):
                 )
 
         else:
-            super().__init__(derivative.graph, pm.Identifier(uuid), attributes)
+            self._uuid = uuid
+            niiri_ns = derivative.find_namespace_with_uri(str(Constants.NIIRI))
+
+            super().__init__(
+                derivative.graph, pm.QualifiedName(niiri_ns, uuid), attributes
+            )
 
         derivative.graph._add_record(self)
 
