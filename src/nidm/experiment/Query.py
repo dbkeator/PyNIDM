@@ -382,7 +382,7 @@ def GetAcquisitionEntityFromSubjectSessionTaskRun(
                         ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
 
                         ?acq_entity prov:wasGeneratedBy ?acq_activity ;
-                            nidm:AcquisitionObject {run} ;
+                            nidm:AcquisitionObject "{run}"^^xsd:string ;
                             nidm:Task "{task}"^^xsd:string .
                 }}
 
