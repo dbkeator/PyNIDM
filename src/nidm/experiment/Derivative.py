@@ -72,6 +72,8 @@ class Derivative(pm.ProvActivity, Core):
             else:
                 self.add_attributes({pm.PROV_TYPE: Constants.NIDM_DERIVATIVE_ACTIVITY})
 
+            # self.add_attributes({pm.PROV_TYPE: Constants.PROV["Activity"]})
+
         # list to store acquisition objects associated with this activity
         self._derivative_objects = []
         # if constructor is called with a session object then add this acquisition to the session
@@ -91,9 +93,7 @@ class Derivative(pm.ProvActivity, Core):
         # add derivative object to self._derivatives list
         self._derivative_objects.extend([derivative_object])
         # create links in graph
-        self.graph.wasGeneratedBy(
-            "niiri:" + derivative_object.get_uuid(), "niiri:" + self.get_uuid()
-        )
+        self.graph.wasGeneratedBy(derivative_object, self)
 
     def get_derivative_objects(self):
         return self._derivative_objects

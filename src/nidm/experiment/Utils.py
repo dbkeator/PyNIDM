@@ -525,7 +525,7 @@ def read_nidm(nidmDoc):
 
 
 def get_RDFliteral_type(rdf_literal):
-    if rdf_literal.datatype == XSD["integer"]:
+    if (rdf_literal.datatype == XSD["integer"]) or (rdf_literal.datatype == XSD["int"]):
         # return (int(rdf_literal))
         return pm.Literal(rdf_literal, datatype=pm.XSD["integer"])
     elif rdf_literal.datatype in (XSD["float"], XSD["double"]):
@@ -2943,19 +2943,20 @@ def add_attributes_with_cde(prov_object, cde, row_variable, value):
     )
     for s in qres:
         entity_id = s
+        # split url into parts
+        entity_nm, entity_term = split_uri(entity_id)
         # find prefix matching our url in rdflib graph...this is because we're bouncing between
         # prov and rdflib objects
         for prefix, namespace in cde.namespaces():
-            if namespace == URIRef(entity_id.rsplit("/", 1)[0] + "/"):
+            # if namespace == URIRef(entity_id.rsplit("/", 1)[0] + "/"):
+            if namespace == URIRef(entity_nm):
                 cde_prefix = prefix
                 # this basically stores the row_data with the predicate being the cde id from above.
                 prov_object.add_attributes(
                     {
                         QualifiedName(
-                            provNamespace(
-                                prefix=cde_prefix, uri=entity_id.rsplit("/", 1)[0] + "/"
-                            ),
-                            entity_id.rsplit("/", 1)[-1],
+                            provNamespace(prefix=cde_prefix, uri=namespace),
+                            entity_term,
                         ): get_RDFliteral_type(value)
                     }
                 )

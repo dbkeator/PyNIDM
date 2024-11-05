@@ -524,8 +524,8 @@ def csv2nidm_main(args=None):
         else:
             print("Reading NIDM file...")
         project = read_nidm(args.nidm_file)
-        # with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
-        #    f.write(project.serializeTurtle())
+        with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
+            f.write(project.serializeTurtle())
 
         id_field = detect_idfield(column_to_terms)
 
@@ -641,13 +641,21 @@ def csv2nidm_main(args=None):
                 # derived entry
 
                 if source_acq_entity is not None:
-                    # add namespace for derived data software
-                    project.addNamespace(
-                        project.safe_string(
-                            software_metadata["title"].to_string(index=False)
-                        ),
-                        software_metadata["url"].to_string(index=False),
+                    found_nm = project.find_namespace_with_uri(
+                        software_metadata["url"].to_string(index=False)
                     )
+                    if found_nm is False:
+                        # add namespace for derived data software
+                        project.addNamespace(
+                            project.safe_string(
+                                software_metadata["title"].to_string(index=False)
+                            ),
+                            software_metadata["url"].to_string(index=False),
+                        )
+
+                        found_nm = project.find_namespace_with_uri(
+                            software_metadata["url"].to_string(index=False)
+                        )
 
                     # create a derivative activity
                     der = Derivative(
