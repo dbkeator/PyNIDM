@@ -371,20 +371,20 @@ def GetAcquisitionEntityFromSubjectSessionTaskRun(
                 prefix sio: <http://semanticscience.org/ontology/sio.owl#>
 
                 select distinct ?acq_activity ?acq_entity
-
                 where {{
-                        ?acq_activity dct:isPartOf <{session_uuid}> ;
-                            prov:qualifiedAssociation _:blanknode .
+                    ?acq_activity dct:isPartOf <{session_uuid}> ;
+                                  prov:qualifiedAssociation _:blanknode .
+                    _:blanknode prov:hadRole {Constants.NIDM_PARTICIPANT} ;
+                                prov:agent ?uuid .
+                    ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
 
-                         _:blanknode prov:hadRole {Constants.NIDM_PARTICIPANT} ;
-                            prov:agent ?uuid  .
-
-                        ?uuid {Constants.NIDM_SUBJECTID} "{subject_id}"^^xsd:string .
-
-                        ?acq_entity prov:wasGeneratedBy ?acq_activity ;
-                            nidm:AcquisitionObject "{run}"^^xsd:string ;
-                            nidm:Task "{task}"^^xsd:string .
+                    ?acq_entity prov:wasGeneratedBy ?acq_activity ;
+                                nidm:AcquisitionObject ?acq_object ;
+                                nidm:Task "{task}"^^xsd:string .
+                    FILTER ((?acq_object = "{run}"^^xsd:string) || (?acq_object = {run}))
                 }}
+
+
 
             """
 

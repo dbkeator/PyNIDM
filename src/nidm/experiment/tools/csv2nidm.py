@@ -524,8 +524,8 @@ def csv2nidm_main(args=None):
         else:
             print("Reading NIDM file...")
         project = read_nidm(args.nidm_file)
-        with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
-            f.write(project.serializeTurtle())
+        # with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
+        #    f.write(project.serializeTurtle())
 
         id_field = detect_idfield(column_to_terms)
 
