@@ -618,7 +618,8 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         # if obj_nm is not in namespaces then it must just be part of some URI in the triple
                         # so just add it as a prov.Identifier
                         if not found_uri:
-                            nidm_obj.add_attributes({predicate: Identifier(objects)})
+                            # nidm_obj.add_attributes({predicate: Identifier(objects)})
+                            nidm_obj.add_attributes({predicate: objects})
                         # else add as explicit prov.QualifiedName because it's easier to read
                         else:
                             nidm_obj.add_attributes(
@@ -627,13 +628,24 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                 except Exception:
                     # this happens when the object can't be split into a namespace and term because there isn't a
                     # separation so we just use the url as the qualified name without localpart
-                    nidm_obj.add_attributes(
-                        {
-                            predicate: pm.QualifiedName(
-                                provNamespace(None, str(objects)), ""
-                            )
-                        }
+                    # in some cases this str(objects) might already be in a namespace so we need to check and if so
+                    # use it, otherwise just use the str(objects) with no prefix as the qname
+                    found_uri, found_nm = find_in_namespaces(
+                        search_uri=URIRef(str(objects)), namespaces=namespaces
                     )
+                    if found_uri:
+                        nidm_obj.add_attributes(
+                            {predicate: pm.QualifiedName(found_nm, "")}
+                        )
+
+                    else:
+                        nidm_obj.add_attributes(
+                            {
+                                predicate: pm.QualifiedName(
+                                    provNamespace(None, str(objects)), ""
+                                )
+                            }
+                        )
             else:
                 # check if this is a qname and if so expand it
                 # added to handle when a value is a qname.  this should expand it....
@@ -2946,22 +2958,40 @@ def add_attributes_with_cde(prov_object, cde, row_variable, value):
         # split url into parts
         entity_nm, entity_term = split_uri(entity_id)
         # find prefix matching our url in rdflib graph...this is because we're bouncing between
-        # prov and rdflib objects
-        for prefix, namespace in cde.namespaces():
-            # if namespace == URIRef(entity_id.rsplit("/", 1)[0] + "/"):
-            if namespace == URIRef(entity_nm):
-                cde_prefix = prefix
-                # this basically stores the row_data with the predicate being the cde id from above.
-                prov_object.add_attributes(
-                    {
-                        QualifiedName(
-                            provNamespace(prefix=cde_prefix, uri=namespace),
-                            entity_term,
-                        ): get_RDFliteral_type(value)
-                    }
-                )
-                # prov_object.add_attributes({QualifiedName(Constants.NIIRI,entity_id):value})
-                break
+        found_uri, found_nm = find_in_namespaces(
+            search_uri=entity_nm, namespaces=prov_object.graph.namespaces
+        )
+        # if entity_nm is not in namespaces then it must just be part of some URI in the triple
+        # so just add it as a prov.Identifier
+        if not found_uri:
+            prov_object.add_attributes(
+                {
+                    pm.QualifiedName(
+                        provNamespace(entity_nm, entity_term)
+                    ): get_RDFliteral_type(value)
+                }
+            )
+        else:
+            prov_object.add_attributes(
+                {pm.QualifiedName(found_nm, entity_term): get_RDFliteral_type(value)}
+            )
+
+        # for prefix, namespace in cde.namespaces():
+        #    # if namespace == URIRef(entity_id.rsplit("/", 1)[0] + "/"):
+        #    if namespace == URIRef(entity_nm):
+        #        cde_prefix = prefix
+        #        # this basically stores the row_data with the predicate being the cde id from above.
+        #        prov_object.add_attributes(
+        #            {
+        #                QualifiedName(
+        #                    provNamespace(prefix=cde_prefix, uri=namespace),
+        #                    entity_term,
+        #                ): get_RDFliteral_type(value)
+        #
+        #            }
+        #        )
+        #        # prov_object.add_attributes({QualifiedName(Constants.NIIRI,entity_id):value})
+        #        break
 
 
 def addDataladDatasetUUID(project_uuid, bidsroot_directory, graph):

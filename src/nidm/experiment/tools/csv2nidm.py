@@ -861,6 +861,13 @@ def csv2nidm_main(args=None):
             logging.info("Adding CDEs to graph....")
         else:
             print("Adding CDEs to graph....")
+
+        with open(
+            "/Users/dkeator/Downloads/before_cdes.ttl", "w", encoding="utf-8"
+        ) as f:
+            f.write(project.serializeTurtle())
+        cde.serialize(destination="/Users/dkeator/Downloads/cdes.ttl", format="turtle")
+
         # convert to rdflib Graph and add CDEs
         rdf_graph = Graph()
         rdf_graph.parse(source=StringIO(project.serializeTurtle()), format="turtle")
