@@ -2998,7 +2998,7 @@ def add_attributes_with_cde(prov_object, cde, row_variable, value):
         entity_nm, entity_term = split_uri(entity_id)
         # find prefix matching our url in rdflib graph...this is because we're bouncing between
         found_uri, found_nm = find_in_namespaces(
-            search_uri=URIRef(entity_nm), namespaces=prov_object.graph.namespaces
+            search_uri=entity_nm, namespaces=prov_object.graph.namespaces
         )
         # if entity_nm is not in namespaces then it must just be part of some URI in the triple
         # so just add it as a prov.Identifier
