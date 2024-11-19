@@ -671,7 +671,7 @@ def csv2nidm_main(args=None):
                     for row_variable in df_row.keys():
                         # check if row_variable is subject id, if so skip it
                         if (row_variable == id_field) or (
-                            row_variable in ["ses", "task", "run"]
+                            row_variable in ["ses", "task", "run", "subject_id"]
                         ):
                             continue
                         else:

@@ -451,19 +451,22 @@ def read_nidm(nidmDoc):
                 )
 
             else:
-                # what do we do here with some uri which we don't have an existing prefix?
-                # we'll just create one using 'der' string for derivative stuff and a random number
-                # prefix = "der_" + getUUID()
-
-                # now add namespace
-                # project.addNamespace(prefix=prefix, uri=str(ns))
-
-                # term_ns = project.find_namespace_with_uri(str(ns))
+                # project.graph.entity(
+                #    pm.QualifiedName(provNamespace(None,(row2[0])),""),
+                #    {pm.QualifiedName(rdfs_ns, "label"): row2[1]},
+                # )
 
                 project.graph.entity(
-                    pm.QualifiedName(provNamespace(None, str(row2[0])), ""),
+                    pm.QualifiedName(
+                        provNamespace("term_" + term, URIRef(row2[0])), ""
+                    ),
                     {pm.QualifiedName(rdfs_ns, "label"): row2[1]},
                 )
+
+                # project.graph.entity(
+                #    pm.Identifier(str(row2[0])),
+                #    {pm.QualifiedName(rdfs_ns, "label"): row2[1]},
+                # )
 
                 # now use this new namespace identifier for term
                 # project.graph.entity(
@@ -618,8 +621,19 @@ def add_metadata_for_subject(rdf_graph, subject_uri, namespaces, nidm_obj):
                         # if obj_nm is not in namespaces then it must just be part of some URI in the triple
                         # so just add it as a prov.Identifier
                         if not found_uri:
+                            nidm_obj.add_attributes(
+                                {
+                                    predicate: pm.QualifiedName(
+                                        provNamespace(
+                                            "term_" + obj_term, URIRef(objects)
+                                        ),
+                                        "",
+                                    )
+                                }
+                            )
                             # nidm_obj.add_attributes({predicate: Identifier(objects)})
-                            nidm_obj.add_attributes({predicate: objects})
+                            # nidm_obj.add_attributes({predicate: URIRef(objects)})
+                            # nidm_obj.add_attributes({predicate: objects})
                         # else add as explicit prov.QualifiedName because it's easier to read
                         else:
                             nidm_obj.add_attributes(
@@ -2817,6 +2831,10 @@ def DD_to_nidm(dd_struct, dataset_identifier=None, cde_namespace=None):
 
         # add the DataElement RDF type in the source namespace
         key_tuple = eval(key)
+
+        if key_tuple.variable == "subject_id":
+            continue
+
         for subkey in key_tuple._asdict().keys():
             if subkey == "variable":
                 # item_ns = Namespace(dd_struct[str(key_tuple)]["url"]+"/")
@@ -2878,13 +2896,25 @@ def DD_to_nidm(dd_struct, dataset_identifier=None, cde_namespace=None):
                     for subdict in value:
                         for isabout_key, isabout_value in subdict.items():
                             if isabout_key in ("@id", "url"):
-                                last_id = isabout_value
+                                # see if isabout_value is in the namespaces and if so, use it, otherwise
+                                # make another one
+                                # found_uri, found_nm = find_in_namespaces(isabout_value,g.namespaces)
+
+                                # bind a namespace for this isabout URL
+                                isabout_nm, isabout_term = split_uri(isabout_value)
+                                term_ns = Namespace(isabout_value)
+                                g.bind(prefix="term_" + isabout_term, namespace=term_ns)
+
+                                # last_id = "term_"+isabout_term
+                                last_id = term_ns
+                                # last_id = isabout_value
                                 # add isAbout key which is the url
                                 g.add(
                                     (
                                         cde_id,
                                         Constants.NIDM["isAbout"],
-                                        URIRef(isabout_value),
+                                        # URIRef(isabout_value),
+                                        URIRef(term_ns),
                                     )
                                 )
                             elif isabout_key == "label":
@@ -2907,13 +2937,22 @@ def DD_to_nidm(dd_struct, dataset_identifier=None, cde_namespace=None):
                 else:
                     for isabout_key, isabout_value in value.items():
                         if isabout_key in ("@id", "url"):
-                            last_id = isabout_value
+                            # bind a namespace for this isabout URL
+                            isabout_nm, isabout_term = split_uri(isabout_value)
+                            term_ns = Namespace(isabout_value)
+                            g.bind(prefix="term_" + isabout_term, namespace=term_ns)
+
+                            # last_id = "term_" + isabout_term
+                            last_id = term_ns
+
+                            # last_id = isabout_value
                             # add isAbout key which is the url
                             g.add(
                                 (
                                     cde_id,
                                     Constants.NIDM["isAbout"],
-                                    URIRef(isabout_value),
+                                    # URIRef(isabout_value),
+                                    term_ns,
                                 )
                             )
                         elif isabout_key == "label":
@@ -2921,7 +2960,7 @@ def DD_to_nidm(dd_struct, dataset_identifier=None, cde_namespace=None):
                             g.add((URIRef(last_id), RDF.type, Constants.PROV["Entity"]))
                             g.add(
                                 (
-                                    URIRef(last_id),
+                                    term_ns,
                                     Constants.RDFS["label"],
                                     Literal(isabout_value),
                                 )
@@ -2959,7 +2998,7 @@ def add_attributes_with_cde(prov_object, cde, row_variable, value):
         entity_nm, entity_term = split_uri(entity_id)
         # find prefix matching our url in rdflib graph...this is because we're bouncing between
         found_uri, found_nm = find_in_namespaces(
-            search_uri=entity_nm, namespaces=prov_object.graph.namespaces
+            search_uri=URIRef(entity_nm), namespaces=prov_object.graph.namespaces
         )
         # if entity_nm is not in namespaces then it must just be part of some URI in the triple
         # so just add it as a prov.Identifier
@@ -2967,7 +3006,7 @@ def add_attributes_with_cde(prov_object, cde, row_variable, value):
             prov_object.add_attributes(
                 {
                     pm.QualifiedName(
-                        provNamespace(entity_nm, entity_term)
+                        provNamespace(entity_nm, entity_term), ""
                     ): get_RDFliteral_type(value)
                 }
             )
