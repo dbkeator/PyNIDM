@@ -546,7 +546,7 @@ def find_in_namespaces(search_uri, namespaces):
     """
 
     for uris in namespaces:
-        if uris.uri == search_uri:
+        if URIRef(uris.uri) == URIRef(search_uri):
             return True, uris
 
     return False, None
