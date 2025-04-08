@@ -26,6 +26,7 @@ from nidm.experiment import (
     Project,
     Session,
 )
+from nidm.experiment.Core import getUUID
 from nidm.experiment.Query import (
     GetAcquisitionEntityFromSubjectSessionRun,
     GetAcquisitionEntityFromSubjectSessionTask,
@@ -524,8 +525,8 @@ def csv2nidm_main(args=None):
         else:
             print("Reading NIDM file...")
         project = read_nidm(args.nidm_file)
-        with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
-            f.write(project.serializeTurtle())
+        # with open("/Users/dkeator/Downloads/test.ttl", "w", encoding="utf-8") as f:
+        #    f.write(project.serializeTurtle())
 
         id_field = detect_idfield(column_to_terms)
 
@@ -862,11 +863,11 @@ def csv2nidm_main(args=None):
         else:
             print("Adding CDEs to graph....")
 
-        with open(
-            "/Users/dkeator/Downloads/before_cdes.ttl", "w", encoding="utf-8"
-        ) as f:
-            f.write(project.serializeTurtle())
-        cde.serialize(destination="/Users/dkeator/Downloads/cdes.ttl", format="turtle")
+        # with open(
+        #    "/Users/dkeator/Downloads/before_cdes.ttl", "w", encoding="utf-8"
+        # ) as f:
+        #    f.write(project.serializeTurtle())
+        # cde.serialize(destination="/Users/dkeator/Downloads/cdes.ttl", format="turtle")
 
         # convert to rdflib Graph and add CDEs
         rdf_graph = Graph()
@@ -893,8 +894,10 @@ def csv2nidm_main(args=None):
         # create empty project
         project = Project()
 
-        # simply add name of file to project since we don't know anything about it
-        project.add_attributes({Constants.NIDM_FILENAME: args.csv_file})
+        # add RDF namespace to project
+        project.addNamespace(prefix="rdfs", uri="http://www.w3.org/2000/01/rdf-schema#")
+        project.addNamespace(prefix="nidm", uri=str(Constants.NIDM))
+        project.addNamespace(prefix="sio", uri=str(Constants.SIO))
 
         # look at column_to_terms dictionary for NIDM URL for subject id  (Constants.NIDM_SUBJECTID)
         id_field = detect_idfield(column_to_terms)
@@ -913,6 +916,26 @@ def csv2nidm_main(args=None):
             # make sure id_field is a string for zero-padded subject ids
             # re-read data file with constraint that key field is read as string
             df = pd.read_csv(args.csv_file, dtype={id_field: str})
+
+        # add namespace for derived data software
+        project.addNamespace(
+            project.safe_string(software_metadata["title"].to_string(index=False)),
+            software_metadata["url"].to_string(index=False),
+        )
+
+        # get namespaces from document for use later....
+        rdfs_ns = project.find_namespace_with_uri(
+            "http://www.w3.org/2000/01/rdf-schema#"
+        )
+        nidm_ns = project.find_namespace_with_uri(str(Constants.NIDM))
+        sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
+
+        # add a collection for storing project-level metadata
+        provgraph = project.getGraph()
+        collection = provgraph.collection(Constants.NIIRI[getUUID()])
+
+        # simply add name of file to project metadata collection since we don't know anything about it
+        collection.add_attributes({Constants.NIDM_FILENAME: args.csv_file})
 
         # iterate over rows and store in NIDM file
         for _, csv_row in df.iterrows():
@@ -945,20 +968,6 @@ def csv2nidm_main(args=None):
                             Literal(row_data),
                         )
 
-                # add cmdline and platform to derivative activity
-                der.add_attributes(
-                    {
-                        software_metadata["url"].to_string(index=False)
-                        + "cmdline": software_metadata["cmdline"].to_string(
-                            index=False
-                        ),
-                        software_metadata["url"].to_string(index=False)
-                        + "platform": software_metadata["platform"].to_string(
-                            index=False
-                        ),
-                    }
-                )
-
                 # create subject agent
                 subject_agent = project.add_person(
                     attributes=({Constants.NIDM_SUBJECTID: str(csv_row[id_field])})
@@ -967,8 +976,8 @@ def csv2nidm_main(args=None):
                 # create software metadata agent
                 software_agent = project.add_person(
                     attributes={
-                        QualifiedName(Constants.RDFS, "type"): QualifiedName(
-                            Constants.NIDM, "SoftwareAgent"
+                        QualifiedName(rdfs_ns, "type"): QualifiedName(
+                            nidm_ns, "SoftwareAgent"
                         )
                     },
                     add_default_type=False,
@@ -977,7 +986,23 @@ def csv2nidm_main(args=None):
                 # add qualified association with subject
                 der.add_qualified_association(
                     person=subject_agent,
-                    role=QualifiedName(Constants.SIO, "Subject"),
+                    role=QualifiedName(sio_ns, "Subject"),
+                )
+
+                found_nm = project.find_namespace_with_uri(
+                    software_metadata["url"].to_string(index=False)
+                )
+
+                # add cmdline and platform to derivative activity
+                der.add_attributes(
+                    {
+                        QualifiedName(found_nm, "cmdline"): software_metadata[
+                            "cmdline"
+                        ].to_string(index=False),
+                        QualifiedName(found_nm, "platform"): software_metadata[
+                            "platform"
+                        ].to_string(index=False),
+                    }
                 )
 
                 # add qualified association with software agent
@@ -991,7 +1016,7 @@ def csv2nidm_main(args=None):
                 )
                 der.add_qualified_association(
                     person=software_agent,
-                    role=QualifiedName(Constants.NIDM, name),
+                    role=QualifiedName(nidm_ns, name),
                 )
                 # add software metadata to software_agent
                 # uri:"http://ncitt.ncit.nih.gov/", prefix:"ncit", term:"age", value:15
@@ -1033,16 +1058,6 @@ def csv2nidm_main(args=None):
 
                     dct_ns = project.find_namespace_with_uri(str(Constants.DCT))
 
-                # find sio namespace in project
-                sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
-
-                # if we need to add this namespace
-                if sio_ns is False:
-                    # add dcmitype namespace
-                    project.addNamespace(prefix="sio", uri=str(Constants.SIO))
-
-                    sio_ns = project.find_namespace_with_uri(str(Constants.SIO))
-
                 project.addAttributes(
                     software_agent,
                     {
@@ -1066,6 +1081,9 @@ def csv2nidm_main(args=None):
                 # create and acquisition activity and entity
                 acq = AssessmentAcquisition(session)
                 acq_entity = AssessmentObject(acq)
+
+                # add acq_entity to project collection
+                provgraph.hadMember(collection, acq_entity)
 
                 # create prov:Agent for subject
                 # acq.add_person(attributes=({Constants.NIDM_SUBJECTID:row['participant_id']}))
@@ -1114,6 +1132,10 @@ def csv2nidm_main(args=None):
                         # print(project.serializeTurtle())
 
         # convert to rdflib Graph and add CDEs
+        with open(
+            "/Users/dkeator/Downloads/before_cdes.ttl", "w", encoding="utf-8"
+        ) as f:
+            f.write(project.serializeTurtle())
         rdf_graph = Graph()
         rdf_graph.parse(source=StringIO(project.serializeTurtle()), format="turtle")
         rdf_graph = rdf_graph + cde
