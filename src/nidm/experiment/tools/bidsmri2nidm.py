@@ -70,6 +70,7 @@ def getsha512(filename):
 
 def check_encoding(filename):
     import chardet
+
     with open(filename, "rb") as f:
         result = chardet.detect(f.read())
     return result["encoding"]
@@ -819,7 +820,9 @@ def addimagingsessions(
                 )
 
             if "run" in file_tpl.entities:
-                acq_obj.add_attributes({BIDS_Constants.json_keys["run"]: file_tpl.run})
+                acq_obj.add_attributes(
+                    {BIDS_Constants.json_keys["run"]: file_tpl.tags["run"].value}
+                )
 
             # get associated JSON file if exists
             json_data = (
@@ -847,126 +850,144 @@ def addimagingsessions(
                             )
             # for bval and bvec files, what to do with those?
 
-            # for now, create new generic acquisition objects, link the files, and associate with the one for the DWI scan?
-            acq_obj_bval = AcquisitionObject(acq)
+            # added to protect against edge case where some subjects don't have bval or bvec files
+            # for diffusion scans
+            try:
+                bids_layout.get_bval(join(file_tpl.dirname, file_tpl.filename))
+                # for now, create new generic acquisition objects, link the files, and associate with the one for the DWI scan?
+                acq_obj_bval = AcquisitionObject(acq)
 
-            # Modified 7/22/23 to add acq_entity to collection
-            session.graph.hadMember(collection, acq_obj_bval)
+                # Modified 7/22/23 to add acq_entity to collection
+                session.graph.hadMember(collection, acq_obj_bval)
 
-            acq_obj_bval.add_attributes({PROV_TYPE: BIDS_Constants.scans["bval"]})
-            # add file link to bval files
-            acq_obj_bval.add_attributes(
-                {
-                    Constants.NIDM_FILENAME: getRelPathToBIDS(
-                        join(
-                            file_tpl.dirname,
-                            bids_layout.get_bval(
-                                join(file_tpl.dirname, file_tpl.filename)
-                            ),
-                        ),
-                        directory,
-                        bidsuri_format=True,
-                    )
-                }
-            )
-
-            # add git-annex/datalad info if exists
-            num_sources = addGitAnnexSources(
-                obj=acq_obj_bval,
-                filepath=join(
-                    file_tpl.dirname,
-                    bids_layout.get_bval(join(file_tpl.dirname, file_tpl.filename)),
-                ),
-                bids_root=directory,
-            )
-
-            if num_sources == 0:
-                # WIP: add absolute location of BIDS directory on disk for later finding of files
+                acq_obj_bval.add_attributes({PROV_TYPE: BIDS_Constants.scans["bval"]})
+                # add file link to bval files
                 acq_obj_bval.add_attributes(
                     {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(
-                            file_tpl.dirname,
-                            bids_layout.get_bval(
-                                join(file_tpl.dirname, file_tpl.filename)
+                        Constants.NIDM_FILENAME: getRelPathToBIDS(
+                            join(
+                                file_tpl.dirname,
+                                bids_layout.get_bval(
+                                    join(file_tpl.dirname, file_tpl.filename)
+                                ),
                             ),
+                            directory,
+                            bidsuri_format=True,
                         )
                     }
                 )
 
-            # add sha512 sum
-            if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
-                acq_obj_bval.add_attributes(
-                    {
-                        Constants.CRYPTO_SHA512: getsha512(
-                            join(directory, file_tpl.dirname, file_tpl.filename)
-                        )
-                    }
+                # add git-annex/datalad info if exists
+                num_sources = addGitAnnexSources(
+                    obj=acq_obj_bval,
+                    filepath=join(
+                        file_tpl.dirname,
+                        bids_layout.get_bval(join(file_tpl.dirname, file_tpl.filename)),
+                    ),
+                    bids_root=directory,
                 )
-            else:
-                logging.info(
-                    "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
-                    join(directory, file_tpl.dirname, file_tpl.filename),
-                )
-            acq_obj_bvec = AcquisitionObject(acq)
 
-            # Modified 7/22/23 to add acq_entity to collection
-            session.graph.hadMember(collection, acq_obj_bvec)
-
-            acq_obj_bvec.add_attributes({PROV_TYPE: BIDS_Constants.scans["bvec"]})
-            # add file link to bvec files
-            acq_obj_bvec.add_attributes(
-                {
-                    Constants.NIDM_FILENAME: getRelPathToBIDS(
-                        join(
-                            file_tpl.dirname,
-                            bids_layout.get_bvec(
-                                join(file_tpl.dirname, file_tpl.filename)
-                            ),
-                        ),
-                        directory,
-                        bidsuri_format=True,
+                if num_sources == 0:
+                    # WIP: add absolute location of BIDS directory on disk for later finding of files
+                    acq_obj_bval.add_attributes(
+                        {
+                            Constants.PROV["Location"]: "file:/"
+                            + join(
+                                file_tpl.dirname,
+                                bids_layout.get_bval(
+                                    join(file_tpl.dirname, file_tpl.filename)
+                                ),
+                            )
+                        }
                     )
-                }
-            )
 
-            # add git-annex/datalad info if exists
-            num_sources = addGitAnnexSources(
-                obj=acq_obj_bvec,
-                filepath=join(
-                    file_tpl.dirname,
-                    bids_layout.get_bvec(join(file_tpl.dirname, file_tpl.filename)),
-                ),
-                bids_root=directory,
-            )
-
-            if num_sources == 0:
-                # WIP: add absolute location of BIDS directory on disk for later finding of files
-                acq_obj_bvec.add_attributes(
-                    {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(
-                            file_tpl.dirname,
-                            bids_layout.get_bvec(
-                                join(file_tpl.dirname, file_tpl.filename)
-                            ),
-                        )
-                    }
-                )
-
-            if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
                 # add sha512 sum
+                if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
+                    acq_obj_bval.add_attributes(
+                        {
+                            Constants.CRYPTO_SHA512: getsha512(
+                                join(directory, file_tpl.dirname, file_tpl.filename)
+                            )
+                        }
+                    )
+                else:
+                    logging.info(
+                        "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
+                        join(directory, file_tpl.dirname, file_tpl.filename),
+                    )
+            except Exception as e:
+                logging.warning(
+                    f"BVAL file missing for file {join(file_tpl.dirname, file_tpl.filename)} \n error = {e}"
+                )
+            # added try block because it appears bids_layout may not exclude subjects that are in
+            # .bidsignore.  Some ABIDE2 datasets don't have bval/bvec files
+            try:
+                # check if bvec file exists
+                bids_layout.get_bvec(join(file_tpl.dirname, file_tpl.filename))
+
+                acq_obj_bvec = AcquisitionObject(acq)
+
+                # Modified 7/22/23 to add acq_entity to collection
+                session.graph.hadMember(collection, acq_obj_bvec)
+
+                acq_obj_bvec.add_attributes({PROV_TYPE: BIDS_Constants.scans["bvec"]})
+                # add file link to bvec files
                 acq_obj_bvec.add_attributes(
                     {
-                        Constants.CRYPTO_SHA512: getsha512(
-                            join(directory, file_tpl.dirname, file_tpl.filename)
+                        Constants.NIDM_FILENAME: getRelPathToBIDS(
+                            join(
+                                file_tpl.dirname,
+                                bids_layout.get_bvec(
+                                    join(file_tpl.dirname, file_tpl.filename)
+                                ),
+                            ),
+                            directory,
+                            bidsuri_format=True,
                         )
                     }
                 )
-            else:
-                logging.info(
-                    "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
-                    join(directory, file_tpl.dirname, file_tpl.filename),
+
+                # add git-annex/datalad info if exists
+                num_sources = addGitAnnexSources(
+                    obj=acq_obj_bvec,
+                    filepath=join(
+                        file_tpl.dirname,
+                        bids_layout.get_bvec(join(file_tpl.dirname, file_tpl.filename)),
+                    ),
+                    bids_root=directory,
+                )
+
+                if num_sources == 0:
+                    # WIP: add absolute location of BIDS directory on disk for later finding of files
+                    acq_obj_bvec.add_attributes(
+                        {
+                            Constants.PROV["Location"]: "file:/"
+                            + join(
+                                file_tpl.dirname,
+                                bids_layout.get_bvec(
+                                    join(file_tpl.dirname, file_tpl.filename)
+                                ),
+                            )
+                        }
+                    )
+
+                if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
+                    # add sha512 sum
+                    acq_obj_bvec.add_attributes(
+                        {
+                            Constants.CRYPTO_SHA512: getsha512(
+                                join(directory, file_tpl.dirname, file_tpl.filename)
+                            )
+                        }
+                    )
+                else:
+                    logging.info(
+                        "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
+                        join(directory, file_tpl.dirname, file_tpl.filename),
+                    )
+            except Exception as e:
+                logging.warning(
+                    f"BVEC file missing for file {join(file_tpl.dirname, file_tpl.filename)}\n error={e}"
                 )
 
             # link bval and bvec acquisition object entities together or is their association with DWI scan...

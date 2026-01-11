@@ -3091,9 +3091,11 @@ def addGitAnnexSources(obj, bids_root, filepath=None):
         else:
             sources = repo.get_urls(bids_root)
 
-        for source in sources:
+        matches = [s for s in sources if os.path.basename(filepath) in s]
+
+        for match in matches:
             # add to graph uuid
-            obj.add_attributes({Constants.PROV["Location"]: URIRef(source)})
+            obj.add_attributes({Constants.PROV["Location"]: URIRef(match)})
 
         return len(sources)
     except Exception as e:
