@@ -17,7 +17,10 @@ import sys
 import bids
 from pandas import DataFrame
 from prov.model import PROV_TYPE, Namespace, QualifiedName
-from rdflib import RDF, Graph, Literal, URIRef
+from rdflib import Namespace as RDFNamespace
+from rdflib import RDF, BNode, Graph, Literal
+from rdflib import URIRef
+from nidm import __version__ as pynidm_version
 from nidm.core import BIDS_Constants, Constants
 from nidm.experiment import (
     AcquisitionObject,
@@ -74,6 +77,85 @@ def check_encoding(filename):
     with open(filename, "rb") as f:
         result = chardet.detect(f.read())
     return result["encoding"]
+
+
+def add_export_provenance(
+    rdf_graph,
+    collection,
+    outputfile,
+    pynidm_version,
+    output_format="turtle",
+):
+    """Add provenance describing creation of the exported NIDM RDF file."""
+    from datetime import datetime, timezone
+    import platform
+
+    prov_ns = RDFNamespace("http://www.w3.org/ns/prov#")
+    rdfs_ns = RDFNamespace("http://www.w3.org/2000/01/rdf-schema#")
+    dct_ns = RDFNamespace("http://purl.org/dc/terms/")
+    schema_ns = RDFNamespace("https://schema.org/")
+    nfo_ns = RDFNamespace("http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#")
+    nidm_ns = RDFNamespace("http://purl.org/nidash/nidm#")
+
+    export_activity = Constants.NIIRI[getUUID()]
+    software_agent = Constants.NIIRI[getUUID()]
+    output_entity = Constants.NIIRI[getUUID()]
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    python_version = platform.python_version()
+    script_name = "bidsmri2nidm.py"
+    output_basename = os.path.basename(outputfile)
+
+    rdf_graph.add((export_activity, RDF.type, prov_ns["Activity"]))
+    rdf_graph.add(
+        (
+            export_activity,
+            rdfs_ns["label"],
+            Literal("Create NIDM RDF from BIDS dataset"),
+        )
+    )
+    rdf_graph.add((export_activity, prov_ns["startedAtTime"], Literal(timestamp)))
+    rdf_graph.add((export_activity, prov_ns["endedAtTime"], Literal(timestamp)))
+    rdf_graph.add((export_activity, nidm_ns["outputFormat"], Literal(output_format)))
+
+    rdf_graph.add((software_agent, RDF.type, prov_ns["SoftwareAgent"]))
+    rdf_graph.add((software_agent, rdfs_ns["label"], Literal("PyNIDM bidsmri2nidm.py")))
+    rdf_graph.add((software_agent, schema_ns["name"], Literal("PyNIDM")))
+    rdf_graph.add(
+        (software_agent, schema_ns["softwareVersion"], Literal(pynidm_version))
+    )
+    rdf_graph.add((software_agent, nidm_ns["softwareVersion"], Literal(pynidm_version)))
+    rdf_graph.add((software_agent, nidm_ns["command"], Literal(script_name)))
+    rdf_graph.add(
+        (
+            software_agent,
+            schema_ns["runtimePlatform"],
+            Literal(f"Python {python_version}"),
+        )
+    )
+
+    rdf_graph.add((output_entity, RDF.type, prov_ns["Entity"]))
+    rdf_graph.add((output_entity, rdfs_ns["label"], Literal("NIDM RDF document")))
+    rdf_graph.add((output_entity, nfo_ns["filename"], Literal(output_basename)))
+    rdf_graph.add((output_entity, dct_ns["format"], Literal(output_format)))
+    rdf_graph.add((output_entity, nidm_ns["outputFormat"], Literal(output_format)))
+
+    rdf_graph.add((output_entity, prov_ns["wasGeneratedBy"], export_activity))
+    rdf_graph.add((export_activity, prov_ns["wasAssociatedWith"], software_agent))
+
+    if collection is not None:
+        collection_id = getattr(collection, "identifier", collection)
+        if isinstance(collection_id, (URIRef, BNode, Literal)):
+            collection_node = collection_id
+        else:
+            collection_str = str(collection_id)
+            if collection_str.startswith("niiri:"):
+                collection_node = Constants.NIIRI[collection_str.split(":", 1)[1]]
+            else:
+                collection_node = URIRef(collection_str)
+        rdf_graph.add((export_activity, prov_ns["used"], collection_node))
+
+    return rdf_graph
 
 
 def main():
@@ -159,7 +241,7 @@ and API Keys.  Then set the environment variable INTERLEX_API_KEY with your key.
     # importlib.reload(sys)
     # sys.setdefaultencoding('utf8')
 
-    project, cde, cde_pheno = bidsmri2project(directory, args)
+    project, collection, cde, cde_pheno = bidsmri2project(directory, args)
 
     #  convert to rdflib Graph and add CDEs
     rdf_graph = Graph()
@@ -192,6 +274,15 @@ and API Keys.  Then set the environment variable INTERLEX_API_KEY with your key.
 
     if args.bidsignore:
         addbidsignore(directory, args.outputfile)
+
+    rdf_graph = add_export_provenance(
+        rdf_graph=rdf_graph,
+        collection=collection,
+        outputfile=outputfile,
+        pynidm_version=pynidm_version,
+        output_format="turtle",
+    )
+
     rdf_graph.serialize(destination=outputfile, format="turtle")
 
     # serialize NIDM file
@@ -1393,7 +1484,7 @@ def bidsmri2project(directory, args):
             # append cde_tmp to cde_pheno list for later inclusion in NIDM graph
             cde_pheno.append(cde_tmp)
 
-    return project, cde, cde_pheno
+    return project, collection, cde, cde_pheno
 
 
 if __name__ == "__main__":
