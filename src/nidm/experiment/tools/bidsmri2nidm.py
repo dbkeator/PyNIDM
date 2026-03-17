@@ -336,15 +336,6 @@ def addimagingsessions(
                 filepath=join(file_tpl.dirname, file_tpl.filename),
                 bids_root=directory,
             )
-            # if there aren't any git annex sources then just store the local directory information
-            if num_sources == 0:
-                # WIP: add absolute location of BIDS directory on disk for later finding of files
-                acq_obj.add_attributes(
-                    {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(file_tpl.dirname, file_tpl.filename)
-                    }
-                )
 
             # add sha512 sum
             if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
@@ -485,16 +476,6 @@ def addimagingsessions(
                 filepath=join(file_tpl.dirname, file_tpl.filename),
                 bids_root=directory,
             )
-
-            # if there aren't any git annex sources then just store the local directory information
-            if num_sources == 0:
-                # WIP: add absolute location of BIDS directory on disk for later finding of files
-                acq_obj.add_attributes(
-                    {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(file_tpl.dirname, file_tpl.filename)
-                    }
-                )
 
             # add sha512 sum
             if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
@@ -705,14 +686,6 @@ def addimagingsessions(
                 bids_root=directory,
             )
 
-            if num_sources == 0:
-                acq_obj.add_attributes(
-                    {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(file_tpl.dirname, file_tpl.filename)
-                    }
-                )
-
             if "run" in file_tpl.entities:
                 acq_obj.add_attributes({BIDS_Constants.json_keys["run"]: file_tpl.run})
 
@@ -811,14 +784,6 @@ def addimagingsessions(
                 bids_root=directory,
             )
 
-            if num_sources == 0:
-                acq_obj.add_attributes(
-                    {
-                        Constants.PROV["Location"]: "file:/"
-                        + join(file_tpl.dirname, file_tpl.filename)
-                    }
-                )
-
             if "run" in file_tpl.entities:
                 acq_obj.add_attributes(
                     {BIDS_Constants.json_keys["run"]: file_tpl.tags["run"].value}
@@ -848,10 +813,7 @@ def addimagingsessions(
                                     ]: json_data.info[key]
                                 }
                             )
-            # for bval and bvec files, what to do with those?
-
-            # added to protect against edge case where some subjects don't have bval or bvec files
-            # for diffusion scans
+            # bval files
             try:
                 bids_layout.get_bval(join(file_tpl.dirname, file_tpl.filename))
                 # for now, create new generic acquisition objects, link the files, and associate with the one for the DWI scan?
@@ -887,20 +849,6 @@ def addimagingsessions(
                     bids_root=directory,
                 )
 
-                if num_sources == 0:
-                    # WIP: add absolute location of BIDS directory on disk for later finding of files
-                    acq_obj_bval.add_attributes(
-                        {
-                            Constants.PROV["Location"]: "file:/"
-                            + join(
-                                file_tpl.dirname,
-                                bids_layout.get_bval(
-                                    join(file_tpl.dirname, file_tpl.filename)
-                                ),
-                            )
-                        }
-                    )
-
                 # add sha512 sum
                 if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
                     acq_obj_bval.add_attributes(
@@ -919,75 +867,76 @@ def addimagingsessions(
                 logging.warning(
                     f"BVAL file missing for file {join(file_tpl.dirname, file_tpl.filename)} \n error = {e}"
                 )
-            # added try block because it appears bids_layout may not exclude subjects that are in
-            # .bidsignore.  Some ABIDE2 datasets don't have bval/bvec files
+
+            # bvec files - bipasses pybids for now because ABIDE2 has some
+            # *.bvec_absolute and *.bvec_image variants that pybids won't return
+
             try:
-                # check if bvec file exists
-                bids_layout.get_bvec(join(file_tpl.dirname, file_tpl.filename))
+                # 1. Determine the base filename (e.g., 'sub-01_ses-1_run-1_dwi')
+                # Strip the .nii.gz or .nii extension from the current file
+                base_filename = file_tpl.filename
+                for ext in [".nii.gz", ".nii"]:
+                    if base_filename.endswith(ext):
+                        base_filename = base_filename[: -len(ext)]
+                        break
 
-                acq_obj_bvec = AcquisitionObject(acq)
+                # Use the directory path from the layout
+                # In PyBIDS 0.22.0, dirname is typically the full path
+                parent_dir = file_tpl.dirname
 
-                # Modified 7/22/23 to add acq_entity to collection
-                session.graph.hadMember(collection, acq_obj_bvec)
+                # Find all files starting with our base name and containing 'bvec'
+                all_files = os.listdir(parent_dir)
+                found_bvec_files = [
+                    f for f in all_files if f.startswith(base_filename) and "bvec" in f
+                ]
 
-                acq_obj_bvec.add_attributes({PROV_TYPE: BIDS_Constants.scans["bvec"]})
-                # add file link to bvec files
-                acq_obj_bvec.add_attributes(
-                    {
-                        Constants.NIDM_FILENAME: getRelPathToBIDS(
-                            join(
-                                file_tpl.dirname,
-                                bids_layout.get_bvec(
-                                    join(file_tpl.dirname, file_tpl.filename)
-                                ),
-                            ),
-                            directory,
-                            bidsuri_format=True,
-                        )
-                    }
-                )
+                for bvec_fn in found_bvec_files:
+                    # Construct the full path to the specific bvec file
+                    full_bvec_path = join(parent_dir, bvec_fn)
 
-                # add git-annex/datalad info if exists
-                num_sources = addGitAnnexSources(
-                    obj=acq_obj_bvec,
-                    filepath=join(
-                        file_tpl.dirname,
-                        bids_layout.get_bvec(join(file_tpl.dirname, file_tpl.filename)),
-                    ),
-                    bids_root=directory,
-                )
+                    acq_obj_bvec = AcquisitionObject(acq)
 
-                if num_sources == 0:
-                    # WIP: add absolute location of BIDS directory on disk for later finding of files
+                    # Add acq_entity to collection
+                    session.graph.hadMember(collection, acq_obj_bvec)
+                    acq_obj_bvec.add_attributes(
+                        {PROV_TYPE: BIDS_Constants.scans["bvec"]}
+                    )
+
+                    # Add file link (Relative path for NIDM)
                     acq_obj_bvec.add_attributes(
                         {
-                            Constants.PROV["Location"]: "file:/"
-                            + join(
-                                file_tpl.dirname,
-                                bids_layout.get_bvec(
-                                    join(file_tpl.dirname, file_tpl.filename)
-                                ),
+                            Constants.NIDM_FILENAME: getRelPathToBIDS(
+                                full_bvec_path,
+                                directory,
+                                bidsuri_format=True,
                             )
                         }
                     )
 
-                if isfile(join(directory, file_tpl.dirname, file_tpl.filename)):
+                    # add git-annex/datalad info if exists
+                    num_sources = addGitAnnexSources(
+                        obj=acq_obj_bvec,
+                        filepath=full_bvec_path,
+                        bids_root=directory,
+                    )
+
                     # add sha512 sum
-                    acq_obj_bvec.add_attributes(
-                        {
-                            Constants.CRYPTO_SHA512: getsha512(
-                                join(directory, file_tpl.dirname, file_tpl.filename)
+                    # Note: This now correctly hashes the bvec file itself, not the nifti
+                    if isfile(full_bvec_path):
+                        acq_obj_bvec.add_attributes(
+                            {Constants.CRYPTO_SHA512: getsha512(full_bvec_path)}
+                        )
+                    else:
+                        # Fallback for complex path structures if needed
+                        alt_path = join(directory, full_bvec_path)
+                        if isfile(alt_path):
+                            acq_obj_bvec.add_attributes(
+                                {Constants.CRYPTO_SHA512: getsha512(alt_path)}
                             )
-                        }
-                    )
-                else:
-                    logging.info(
-                        "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
-                        join(directory, file_tpl.dirname, file_tpl.filename),
-                    )
+
             except Exception as e:
                 logging.warning(
-                    f"BVEC file missing for file {join(file_tpl.dirname, file_tpl.filename)}\n error={e}"
+                    f"Error processing BVEC files for {file_tpl.filename}\n error={e}"
                 )
 
             # link bval and bvec acquisition object entities together or is their association with DWI scan...
@@ -1144,7 +1093,7 @@ def bidsmri2project(directory, args):
                 acq_entity.add_attributes(
                     {
                         Constants.NIDM_FILENAME: getRelPathToBIDS(
-                            os.path.join(directory, "participants.tsv"),
+                            os.path.join("participants.tsv"),
                             directory,
                             bidsuri_format=True,
                         )
@@ -1162,14 +1111,6 @@ def bidsmri2project(directory, args):
                 num_sources = addGitAnnexSources(
                     obj=acq_entity.get_uuid(), bids_root=directory
                 )
-                # else just add the local path to the dataset
-                if num_sources == 0:
-                    acq_entity.add_attributes(
-                        {
-                            Constants.PROV["Location"]: "file:/"
-                            + os.path.join(directory, "participants.tsv")
-                        }
-                    )
 
                 # if there's a participant.json sidecar file then create an entity and
                 # associate it with all the assessment entities
@@ -1185,7 +1126,7 @@ def bidsmri2project(directory, args):
                                 Namespace("bids", Constants.BIDS), "sidecar_file"
                             ),
                             Constants.NIDM_FILENAME: getRelPathToBIDS(
-                                os.path.join(directory, "participants.json"),
+                                os.path.join("participants.json"),
                                 directory,
                                 bidsuri_format=True,
                             ),
@@ -1199,14 +1140,6 @@ def bidsmri2project(directory, args):
                         filepath=os.path.join(directory, "participants.json"),
                         bids_root=directory,
                     )
-                    # else just add the local path to the dataset
-                    if num_sources == 0:
-                        json_sidecar.add_attributes(
-                            {
-                                Constants.PROV["Location"]: "file:/"
-                                + os.path.join(directory, "participants.json")
-                            }
-                        )
 
                 # check if json_sidecar entity exists and if so associate assessment entity with it
                 if "json_sidecar" in locals():
@@ -1421,12 +1354,6 @@ def bidsmri2project(directory, args):
                 num_sources = addGitAnnexSources(
                     obj=acq_entity.get_uuid(), bids_root=directory
                 )
-                # else just add the local path to the dataset
-                # 7/22/23 commented out to not add local source if no gitAnnex source found
-                # if num_sources == 0:
-                #    acq_entity.add_attributes(
-                #        {Constants.PROV["Location"]: "file:/" + tsv_file}
-                #    )
 
                 # link associated JSON file if it exists
                 data_dict = os.path.join(
@@ -1458,12 +1385,6 @@ def bidsmri2project(directory, args):
                         filepath=data_dict,
                         bids_root=directory,
                     )
-                    # else just add the local path to the dataset
-                    # 7/22/23 commented out so local source file isn't stored if no gitAnnex sources
-                    # if num_sources == 0:
-                    #    json_entity.add_attributes(
-                    #        {Constants.PROV["Location"]: "file:/" + data_dict}
-                    #    )
 
                     # connect json_entity with acq_entity
                     acq_entity.add_attributes(
