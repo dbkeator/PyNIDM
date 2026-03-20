@@ -481,7 +481,6 @@ def csv2nidm_main(args=None):
                 output_file=args.output_file,
                 json_source=json_map,
                 associate_concepts=False,
-                dataset_identifier=args.dataset_identifier,
                 cde_namespace={
                     software_metadata["title"]
                     .to_string(index=False): software_metadata["url"]
@@ -496,7 +495,6 @@ def csv2nidm_main(args=None):
                 output_file=args.output_file,
                 json_source=json_map,
                 associate_concepts=False,
-                dataset_identifier=args.dataset_identifier,
             )
 
     if args.logfile is not None:
