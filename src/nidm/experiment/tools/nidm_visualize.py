@@ -20,7 +20,7 @@ def visualize(nidm_file_list):
     stored in the same directories.
     """
 
-    for nidm_file in nidm_file_list.split(","):
+    for nidm_file in [f.strip() for f in nidm_file_list.split(",") if f.strip()]:
         # read in nidm file
         project = read_nidm(nidm_file)
 

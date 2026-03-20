@@ -76,6 +76,188 @@ def _prov_bundle_for_obj(nidm_obj):
     return getattr(nidm_obj, "graph", getattr(nidm_obj, "_bundle", None))
 
 
+def _prov_identifier_for_node(node, namespaces):
+    if isinstance(node, Literal):
+        return get_RDFliteral_type(node)
+    if isinstance(node, BNode):
+        return Identifier(str(node))
+    return _safe_qname_or_identifier(node, namespaces)
+
+
+def _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, prov_obj):
+    """
+    Copy non-structural RDF predicates from subj onto the created pyPROV object.
+    Skip core typing/edge predicates that we rebuild explicitly.
+    """
+    skip_preds = {
+        str(RDF.type),
+        str(Constants.PROV["used"]),
+        str(Constants.PROV["wasAssociatedWith"]),
+        str(Constants.PROV["wasGeneratedBy"]),
+        str(Constants.PROV["hadMember"]),
+        str(Constants.PROV["qualifiedAssociation"]),
+        str(Constants.DCT["isPartOf"]),
+    }
+
+    for pred, obj in rdf_graph.predicate_objects(subject=subj):
+        if str(pred) in skip_preds:
+            continue
+
+        pred_obj = _predicate_to_prov(pred, namespaces)
+
+        if isinstance(obj, BNode):
+            try:
+                prov_obj.add_attributes({pred_obj: Identifier(str(obj))})
+            except Exception:
+                pass
+            _copy_bnode_metadata(rdf_graph, obj, namespaces, prov_obj)
+            continue
+
+        obj_val = _object_to_prov_value(obj, namespaces)
+        if obj_val is None:
+            continue
+
+        try:
+            prov_obj.add_attributes({pred_obj: obj_val})
+        except Exception:
+            try:
+                prov_obj.add_attributes({Identifier(str(pred)): obj_val})
+            except Exception:
+                pass
+
+
+def _ensure_generic_prov_record(project, rdf_graph, subj, namespaces, cache):
+    """
+    Create a generic pyPROV record for subjects that are not already modeled by the
+    specialized read_nidm() logic, so save_DotGraph() can visualize them.
+    """
+    sid = str(subj)
+    if sid in cache:
+        return cache[sid]
+
+    prov_graph = project.graph
+
+    types = {str(o) for o in rdf_graph.objects(subj, RDF.type)}
+
+    # Skip things already handled by the existing object-model reconstruction.
+    skip_types = {
+        str(Constants.NIDM_PROJECT.uri),
+        str(Constants.NIDM_SESSION.uri),
+        str(Constants.NIDM_ACQUISITION_ACTIVITY.uri),
+        str(Constants.NIDM_ACQUISITION_ENTITY.uri),
+        str(Constants.NIDM_ASSESSMENT_ACQUISITION.uri),
+        str(Constants.NIDM_ASSESSMENT_ENTITY.uri),
+        str(Constants.NIDM_DEMOGRAPHICS_ENTITY.uri),
+        str(Constants.NIDM_DATAELEMENT.uri),
+    }
+    if types & skip_types:
+        return _record_by_id(prov_graph, subj)
+
+    ident = _safe_qname_or_identifier(subj, namespaces)
+
+    if str(Constants.PROV["SoftwareAgent"]) in types:
+        rec = prov_graph.agent(ident)
+    elif str(Constants.PROV["Person"]) in types:
+        rec = prov_graph.agent(ident)
+    elif str(Constants.PROV["Agent"]) in types:
+        rec = prov_graph.agent(ident)
+    elif (
+        str(Constants.PROV["Collection"]) in types or "bids" in " ".join(types).lower()
+    ):
+        try:
+            rec = prov_graph.collection(ident)
+        except Exception:
+            rec = prov_graph.entity(ident)
+    elif str(Constants.PROV["Activity"]) in types:
+        rec = prov_graph.activity(ident)
+    else:
+        rec = prov_graph.entity(ident)
+
+    _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, rec)
+    cache[sid] = rec
+    return rec
+
+
+def _import_unmodeled_prov_branch(project, rdf_graph):
+    """
+    Import generic PROV nodes and edges that the specialized NIDM readers do not
+    reconstruct, such as export provenance from bidsmri2nidm.py.
+    """
+    namespaces = project.graph.namespaces
+    cache = {}
+
+    # First create candidate records.
+    candidates = set()
+
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Activity"])):
+        candidates.add(s)
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Agent"])):
+        candidates.add(s)
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["SoftwareAgent"])):
+        candidates.add(s)
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Person"])):
+        candidates.add(s)
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Entity"])):
+        candidates.add(s)
+    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Collection"])):
+        candidates.add(s)
+
+    # Also include BIDS dataset collections explicitly.
+    for s in rdf_graph.subjects(RDF.type, URIRef(str(Constants.BIDS["Dataset"]))):
+        candidates.add(s)
+
+    for subj in candidates:
+        _ensure_generic_prov_record(project, rdf_graph, subj, namespaces, cache)
+
+    prov_graph = project.graph
+
+    # Then recreate the key structural edges needed for visualization.
+    def _get(node):
+        rec = _record_by_id(prov_graph, node)
+        if rec is None:
+            rec = _ensure_generic_prov_record(
+                project, rdf_graph, node, namespaces, cache
+            )
+        return rec
+
+    for subj in candidates:
+        subj_rec = _get(subj)
+        if subj_rec is None:
+            continue
+
+        for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["used"])):
+            obj_rec = _get(obj)
+            if obj_rec is not None:
+                try:
+                    prov_graph.used(subj_rec, obj_rec)
+                except Exception:
+                    pass
+
+        for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["wasAssociatedWith"])):
+            obj_rec = _get(obj)
+            if obj_rec is not None:
+                try:
+                    prov_graph.wasAssociatedWith(subj_rec, obj_rec)
+                except Exception:
+                    pass
+
+        for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["hadMember"])):
+            obj_rec = _get(obj)
+            if obj_rec is not None:
+                try:
+                    prov_graph.hadMember(subj_rec, obj_rec)
+                except Exception:
+                    pass
+
+        for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["wasGeneratedBy"])):
+            obj_rec = _get(obj)
+            if obj_rec is not None:
+                try:
+                    prov_graph.wasGeneratedBy(subj_rec, obj_rec)
+                except Exception:
+                    pass
+
+
 def _record_by_id(prov_graph, identifier):
     """Return the first PROV record with this identifier, or None."""
     ident_str = str(identifier)
@@ -317,6 +499,50 @@ def _rdflib_graph_from_prov_graph(prov_graph, rdf_format="ttl"):
     return g
 
 
+def normalize_prov_graph_namespaces(prov_graph):
+    """
+    Compatibility helper used by Core.save_DotGraph().
+
+    Ensure namespace records on the pyPROV graph are normalized/deduplicated so
+    downstream visualization code can render QName-style identifiers reliably.
+
+    This is intentionally conservative: it preserves the graph and only
+    re-adds namespace bindings in a stable way when possible.
+    """
+    try:
+        seen = set()
+        normalized = []
+
+        for ns in getattr(prov_graph, "namespaces", []):
+            try:
+                key = (str(ns.prefix), str(ns.uri))
+                if key not in seen:
+                    seen.add(key)
+                    normalized.append(ns)
+            except Exception:
+                continue
+
+        # If pyPROV stores namespaces as a mutable list, replace with deduped copy.
+        try:
+            prov_graph.namespaces = normalized
+        except Exception:
+            pass
+
+        # Also try to re-register them through the graph API if available.
+        for ns in normalized:
+            try:
+                prov_graph.add_namespace(ns.prefix, ns.uri)
+            except Exception:
+                pass
+
+    except Exception:
+        # Visualization should not fail just because namespace normalization
+        # could not be applied.
+        pass
+
+    return prov_graph
+
+
 def _install_lossless_serialize(
     prov_graph, original_rdf_graph, original_text=None, original_format="turtle"
 ):
@@ -408,52 +634,6 @@ def _install_lossless_serialize(
 
         for t in delta_added:
             merged.add(t)
-
-        if destination is None:
-            return merged.serialize(format=rdf_format)
-        merged.serialize(destination=destination, format=rdf_format)
-        return None
-
-    prov_graph.serialize = MethodType(_serialize_lossless, prov_graph)
-    prov_graph._lossless_serialize_installed = True
-    return prov_graph
-
-    prov_graph._prov_serialize_original = prov_graph.serialize
-    prov_graph._original_rdf_graph = Graph()
-    for t in original_rdf_graph:
-        prov_graph._original_rdf_graph.add(t)
-
-    # Capture baseline object-generated graph after read_nidm() construction is complete
-    try:
-        prov_graph._baseline_rdf_graph = _rdflib_graph_from_prov_graph(prov_graph)
-    except Exception:
-        prov_graph._baseline_rdf_graph = Graph()
-
-    def _serialize_lossless(
-        self, destination=None, serialization_format="rdf", rdf_format="ttl", **kwargs
-    ):
-        # Only intercept RDF serialization; defer everything else to pyPROV.
-        if serialization_format != "rdf":
-            return self._prov_serialize_original(
-                destination,
-                format=serialization_format,
-                rdf_format=rdf_format,
-                **kwargs,
-            )
-
-        current_graph = _rdflib_graph_from_prov_graph(self, rdf_format=rdf_format)
-        merged = Graph()
-
-        # Start from the original parsed graph for exact round-trip fidelity.
-        for t in self._original_rdf_graph:
-            merged.add(t)
-
-        # Add only the delta introduced after read_nidm() built the baseline graph.
-        baseline = getattr(self, "_baseline_rdf_graph", Graph())
-        baseline_triples = set(baseline)
-        for t in current_graph:
-            if t not in baseline_triples:
-                merged.add(t)
 
         if destination is None:
             return merged.serialize(format=rdf_format)
@@ -925,6 +1105,12 @@ def read_nidm(nidmDoc):
         add_metadata_for_subject(
             rdf_graph_parse, row["uuid"], project.graph.namespaces, deriv_obj
         )
+
+    # Import generic PROV records not covered by the specialized NIDM object readers.
+    try:
+        _import_unmodeled_prov_branch(project, rdf_graph_parse)
+    except Exception as e:
+        logger.warning("Failed importing generic PROV branch for visualization: %s", e)
 
     _install_lossless_serialize(
         project.graph,
