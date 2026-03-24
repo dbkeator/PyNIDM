@@ -17,6 +17,7 @@ KEY_PREDS = {
 FIXTURES = [
     Path(__file__).resolve().parent / "data" / "read_nidm" / "brainvol_nidm.ttl",
     Path(__file__).resolve().parent / "data" / "read_nidm" / "derivatives_nidm.ttl",
+    Path(__file__).resolve().parent / "data" / "read_nidm" / "nidm_w_provenance.ttl",
 ]
 
 

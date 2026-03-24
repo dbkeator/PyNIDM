@@ -76,12 +76,121 @@ def _prov_bundle_for_obj(nidm_obj):
     return getattr(nidm_obj, "graph", getattr(nidm_obj, "_bundle", None))
 
 
+def _register_loaded_record(record_map, subject_uri, nidm_obj):
+    """Register a loaded wrapper/record by RDF subject URI and identifier."""
+    if record_map is None or subject_uri is None or nidm_obj is None:
+        return
+    record_map[str(subject_uri)] = nidm_obj
+    ident = getattr(nidm_obj, "identifier", None)
+    if ident is not None:
+        record_map.setdefault(str(ident), nidm_obj)
+
+
 def _prov_identifier_for_node(node, namespaces):
     if isinstance(node, Literal):
         return get_RDFliteral_type(node)
     if isinstance(node, BNode):
         return Identifier(str(node))
     return _safe_qname_or_identifier(node, namespaces)
+
+
+def _has_structural_prov_edge(rdf_graph, subj):
+    structural_preds = (
+        URIRef(Constants.PROV["used"]),
+        URIRef(Constants.PROV["wasAssociatedWith"]),
+        URIRef(Constants.PROV["wasGeneratedBy"]),
+        URIRef(Constants.PROV["hadMember"]),
+        URIRef(Constants.PROV["qualifiedAssociation"]),
+        URIRef(Constants.PROV["wasAttributedTo"]),
+        URIRef(Constants.PROV["wasInfluencedBy"]),
+    )
+    for pred in structural_preds:
+        if any(True for _ in rdf_graph.objects(subj, pred)):
+            return True
+        if any(True for _ in rdf_graph.subjects(pred, subj)):
+            return True
+    return False
+
+
+def _type_closure_strings(rdf_graph, subj):
+    seen = set()
+    stack = [obj for obj in rdf_graph.objects(subj, RDF.type)]
+    while stack:
+        cur = stack.pop()
+        cur_s = str(cur)
+        if cur_s in seen:
+            continue
+        seen.add(cur_s)
+        for parent in rdf_graph.objects(cur, RDFS.subClassOf):
+            stack.append(parent)
+    return seen
+
+
+def _infer_generic_prov_kind(rdf_graph, subj):
+    type_uris = _type_closure_strings(rdf_graph, subj)
+
+    is_agent = any(
+        t in type_uris
+        for t in (
+            str(Constants.PROV["SoftwareAgent"]),
+            str(Constants.PROV["Person"]),
+            str(Constants.PROV["Agent"]),
+        )
+    )
+    is_collection = any(
+        t in type_uris
+        for t in (
+            str(Constants.PROV["Collection"]),
+            str(Constants.BIDS["Dataset"]),
+        )
+    )
+    is_activity = str(Constants.PROV["Activity"]) in type_uris
+    is_entity = str(Constants.PROV["Entity"]) in type_uris or is_collection
+
+    if any(True for _ in rdf_graph.objects(subj, URIRef(Constants.PROV["used"]))):
+        is_activity = True
+    if any(
+        True
+        for _ in rdf_graph.objects(subj, URIRef(Constants.PROV["wasAssociatedWith"]))
+    ):
+        is_activity = True
+    if any(
+        True for _ in rdf_graph.subjects(URIRef(Constants.PROV["wasGeneratedBy"]), subj)
+    ):
+        is_activity = True
+
+    if any(
+        True
+        for _ in rdf_graph.subjects(URIRef(Constants.PROV["wasAssociatedWith"]), subj)
+    ):
+        is_agent = True
+
+    if any(True for _ in rdf_graph.objects(subj, URIRef(Constants.PROV["hadMember"]))):
+        is_collection = True
+        is_entity = True
+
+    if any(
+        True for _ in rdf_graph.objects(subj, URIRef(Constants.PROV["wasGeneratedBy"]))
+    ):
+        is_entity = True
+    if any(
+        True for _ in rdf_graph.objects(subj, URIRef(Constants.PROV["wasAttributedTo"]))
+    ):
+        is_entity = True
+    if any(True for _ in rdf_graph.subjects(URIRef(Constants.PROV["used"]), subj)):
+        is_entity = True
+    if any(True for _ in rdf_graph.subjects(URIRef(Constants.PROV["hadMember"]), subj)):
+        is_entity = True
+
+    if is_agent:
+        return "agent", type_uris
+    if is_collection:
+        return "collection", type_uris
+    if is_activity:
+        return "activity", type_uris
+    if is_entity:
+        return "entity", type_uris
+    return None, type_uris
 
 
 def _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, prov_obj):
@@ -126,20 +235,99 @@ def _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, prov_obj):
                 pass
 
 
-def _ensure_generic_prov_record(project, rdf_graph, subj, namespaces, cache):
+def _apply_extra_rdf_types_for_subject(
+    rdf_graph, subj, namespaces, prov_obj, type_uris=None
+):
     """
-    Create a generic pyPROV record for subjects that are not already modeled by the
-    specialized read_nidm() logic, so save_DotGraph() can visualize them.
+    Preserve extra rdf:type assertions not implied by the pyPROV constructor.
+    This is especially important for prov:SoftwareAgent and bids:Dataset.
+    """
+    if type_uris is None:
+        type_uris = {str(o) for o in rdf_graph.objects(subj, RDF.type)}
+
+    implied_types = set()
+    if str(Constants.PROV["Activity"]) in type_uris:
+        implied_types.add(str(Constants.PROV["Activity"]))
+    if (
+        str(Constants.PROV["Agent"]) in type_uris
+        or str(Constants.PROV["Person"]) in type_uris
+        or str(Constants.PROV["SoftwareAgent"]) in type_uris
+    ):
+        implied_types.add(str(Constants.PROV["Agent"]))
+    if (
+        str(Constants.PROV["Collection"]) in type_uris
+        or str(Constants.BIDS["Dataset"]) in type_uris
+    ):
+        implied_types.add(str(Constants.PROV["Entity"]))
+        implied_types.add(str(Constants.PROV["Collection"]))
+    if str(Constants.PROV["Entity"]) in type_uris:
+        implied_types.add(str(Constants.PROV["Entity"]))
+
+    for type_uri in rdf_graph.objects(subj, RDF.type):
+        type_str = str(type_uri)
+        if type_str in implied_types:
+            continue
+        try:
+            prov_obj.add_attributes(
+                {
+                    Identifier(str(RDF.type)): _safe_qname_or_identifier(
+                        type_uri, namespaces
+                    )
+                }
+            )
+        except Exception:
+            pass
+
+
+def _ensure_generic_prov_record(
+    project, rdf_graph, subj, namespaces, cache, record_map=None
+):
+    """
+    Create a generic pyPROV record for subjects not already instantiated by the
+    specialized read_nidm() logic.
     """
     sid = str(subj)
+
+    if record_map is not None and sid in record_map:
+        rec = record_map[sid]
+        try:
+            type_uris = {str(o) for o in rdf_graph.objects(subj, RDF.type)}
+            _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, rec)
+            _apply_extra_rdf_types_for_subject(
+                rdf_graph, subj, namespaces, rec, type_uris=type_uris
+            )
+        except Exception:
+            pass
+        return rec
+
     if sid in cache:
-        return cache[sid]
+        rec = cache[sid]
+        try:
+            type_uris = {str(o) for o in rdf_graph.objects(subj, RDF.type)}
+            _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, rec)
+            _apply_extra_rdf_types_for_subject(
+                rdf_graph, subj, namespaces, rec, type_uris=type_uris
+            )
+        except Exception:
+            pass
+        return rec
 
     prov_graph = project.graph
 
-    types = {str(o) for o in rdf_graph.objects(subj, RDF.type)}
+    kind, type_uris = _infer_generic_prov_kind(rdf_graph, subj)
 
-    # Skip things already handled by the existing object-model reconstruction.
+    existing = _record_by_id(prov_graph, subj)
+    if existing is not None:
+        _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, existing)
+        _apply_extra_rdf_types_for_subject(
+            rdf_graph, subj, namespaces, existing, type_uris=type_uris
+        )
+        cache[sid] = existing
+        if record_map is not None:
+            record_map[sid] = existing
+        return existing
+
+    # Do not generically recreate things already handled by specialized readers.
     skip_types = {
         str(Constants.NIDM_PROJECT.uri),
         str(Constants.NIDM_SESSION.uri),
@@ -150,35 +338,35 @@ def _ensure_generic_prov_record(project, rdf_graph, subj, namespaces, cache):
         str(Constants.NIDM_DEMOGRAPHICS_ENTITY.uri),
         str(Constants.NIDM_DATAELEMENT.uri),
     }
-    if types & skip_types:
-        return _record_by_id(prov_graph, subj)
+    if type_uris & skip_types:
+        return None
 
     ident = _safe_qname_or_identifier(subj, namespaces)
 
-    if str(Constants.PROV["SoftwareAgent"]) in types:
+    if kind == "agent":
         rec = prov_graph.agent(ident)
-    elif str(Constants.PROV["Person"]) in types:
-        rec = prov_graph.agent(ident)
-    elif str(Constants.PROV["Agent"]) in types:
-        rec = prov_graph.agent(ident)
-    elif (
-        str(Constants.PROV["Collection"]) in types or "bids" in " ".join(types).lower()
-    ):
+    elif kind == "collection":
         try:
             rec = prov_graph.collection(ident)
         except Exception:
             rec = prov_graph.entity(ident)
-    elif str(Constants.PROV["Activity"]) in types:
+    elif kind == "activity":
         rec = prov_graph.activity(ident)
     else:
         rec = prov_graph.entity(ident)
 
     _copy_simple_attributes_for_subject(rdf_graph, subj, namespaces, rec)
+    _apply_extra_rdf_types_for_subject(
+        rdf_graph, subj, namespaces, rec, type_uris=type_uris
+    )
+
     cache[sid] = rec
+    if record_map is not None:
+        record_map[sid] = rec
     return rec
 
 
-def _import_unmodeled_prov_branch(project, rdf_graph):
+def _import_unmodeled_prov_branch(project, rdf_graph, record_map=None):
     """
     Import generic PROV nodes and edges that the specialized NIDM readers do not
     reconstruct, such as export provenance from bidsmri2nidm.py.
@@ -186,37 +374,49 @@ def _import_unmodeled_prov_branch(project, rdf_graph):
     namespaces = project.graph.namespaces
     cache = {}
 
-    # First create candidate records.
     candidates = set()
 
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Activity"])):
-        candidates.add(s)
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Agent"])):
-        candidates.add(s)
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["SoftwareAgent"])):
-        candidates.add(s)
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Person"])):
-        candidates.add(s)
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Entity"])):
-        candidates.add(s)
-    for s in rdf_graph.subjects(RDF.type, URIRef(Constants.PROV["Collection"])):
-        candidates.add(s)
+    # Seed candidates from typed subjects, labels, and structural PROV edges.
+    for subj in set(rdf_graph.subjects(predicate=RDF.type)):
+        kind, _ = _infer_generic_prov_kind(rdf_graph, subj)
+        if kind is not None:
+            candidates.add(subj)
 
-    # Also include BIDS dataset collections explicitly.
-    for s in rdf_graph.subjects(RDF.type, URIRef(str(Constants.BIDS["Dataset"]))):
-        candidates.add(s)
+    for subj in set(rdf_graph.subjects(predicate=RDFS.label)) | set(
+        rdf_graph.subjects(predicate=URIRef(Constants.PROV["label"]))
+    ):
+        kind, _ = _infer_generic_prov_kind(rdf_graph, subj)
+        if kind is not None or _has_structural_prov_edge(rdf_graph, subj):
+            candidates.add(subj)
+
+    structural_preds = (
+        URIRef(Constants.PROV["used"]),
+        URIRef(Constants.PROV["wasAssociatedWith"]),
+        URIRef(Constants.PROV["wasGeneratedBy"]),
+        URIRef(Constants.PROV["hadMember"]),
+        URIRef(Constants.PROV["qualifiedAssociation"]),
+    )
+    for pred in structural_preds:
+        for subj, obj in rdf_graph.subject_objects(pred):
+            if not isinstance(subj, BNode):
+                candidates.add(subj)
+            if not isinstance(obj, BNode):
+                candidates.add(obj)
 
     for subj in candidates:
-        _ensure_generic_prov_record(project, rdf_graph, subj, namespaces, cache)
+        _ensure_generic_prov_record(
+            project, rdf_graph, subj, namespaces, cache, record_map=record_map
+        )
 
     prov_graph = project.graph
 
-    # Then recreate the key structural edges needed for visualization.
     def _get(node):
+        if record_map is not None and str(node) in record_map:
+            return record_map[str(node)]
         rec = _record_by_id(prov_graph, node)
         if rec is None:
             rec = _ensure_generic_prov_record(
-                project, rdf_graph, node, namespaces, cache
+                project, rdf_graph, node, namespaces, cache, record_map=record_map
             )
         return rec
 
@@ -228,34 +428,62 @@ def _import_unmodeled_prov_branch(project, rdf_graph):
         for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["used"])):
             obj_rec = _get(obj)
             if obj_rec is not None:
+                subj_id = getattr(subj_rec, "identifier", subj_rec)
+                obj_id = getattr(obj_rec, "identifier", obj_rec)
                 try:
-                    prov_graph.used(subj_rec, obj_rec)
-                except Exception:
-                    pass
+                    prov_graph.used(subj_id, obj_id)
+                except Exception as e:
+                    logger.warning(
+                        "generic PROV used() failed for %s -> %s: %s",
+                        subj_id,
+                        obj_id,
+                        e,
+                    )
 
         for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["wasAssociatedWith"])):
             obj_rec = _get(obj)
             if obj_rec is not None:
+                subj_id = getattr(subj_rec, "identifier", subj_rec)
+                obj_id = getattr(obj_rec, "identifier", obj_rec)
                 try:
-                    prov_graph.wasAssociatedWith(subj_rec, obj_rec)
-                except Exception:
-                    pass
+                    prov_graph.wasAssociatedWith(subj_id, obj_id)
+                except Exception as e:
+                    logger.warning(
+                        "generic PROV wasAssociatedWith() failed for %s -> %s: %s",
+                        subj_id,
+                        obj_id,
+                        e,
+                    )
 
         for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["hadMember"])):
             obj_rec = _get(obj)
             if obj_rec is not None:
+                subj_id = getattr(subj_rec, "identifier", subj_rec)
+                obj_id = getattr(obj_rec, "identifier", obj_rec)
                 try:
-                    prov_graph.hadMember(subj_rec, obj_rec)
-                except Exception:
-                    pass
+                    prov_graph.hadMember(subj_id, obj_id)
+                except Exception as e:
+                    logger.warning(
+                        "generic PROV hadMember() failed for %s -> %s: %s",
+                        subj_id,
+                        obj_id,
+                        e,
+                    )
 
         for obj in rdf_graph.objects(subj, URIRef(Constants.PROV["wasGeneratedBy"])):
             obj_rec = _get(obj)
             if obj_rec is not None:
+                subj_id = getattr(subj_rec, "identifier", subj_rec)
+                obj_id = getattr(obj_rec, "identifier", obj_rec)
                 try:
-                    prov_graph.wasGeneratedBy(subj_rec, obj_rec)
-                except Exception:
-                    pass
+                    prov_graph.wasGeneratedBy(subj_id, obj_id)
+                except Exception as e:
+                    logger.warning(
+                        "generic PROV wasGeneratedBy() failed for %s -> %s: %s",
+                        subj_id,
+                        obj_id,
+                        e,
+                    )
 
 
 def _record_by_id(prov_graph, identifier):
@@ -496,6 +724,14 @@ def _rdflib_graph_from_prov_graph(prov_graph, rdf_format="ttl"):
     except AttributeError:
         data = prov_graph.serialize(None, format="rdf", rdf_format=rdf_format)
     g.parse(data=data, format=rdf_format)
+
+    try:
+        for subj, obj in list(g.subject_objects(URIRef(Constants.PROV["label"]))):
+            if (subj, RDFS.label, obj) not in g:
+                g.add((subj, RDFS.label, obj))
+    except Exception:
+        pass
+
     return g
 
 
@@ -668,6 +904,9 @@ def read_nidm(nidmDoc):
     rdf_graph = Graph()
     rdf_graph_parse = rdf_graph.parse(nidmDoc, format=original_guess_format)
 
+    # registry of RDF subject URI -> loaded wrapper/record
+    record_map = {}
+
     # Query graph for project metadata and create project level objects
     # Get subject URI for project
     proj_id = None
@@ -710,6 +949,7 @@ def read_nidm(nidmDoc):
         add_metadata_for_subject(
             rdf_graph_parse, proj_id, project.graph.namespaces, project
         )
+        _register_loaded_record(record_map, proj_id, project)
 
     # Query graph for sessions, instantiate session objects, and add to project._session list
     # Get subject URI for sessions
@@ -732,6 +972,7 @@ def read_nidm(nidmDoc):
         # now get remaining metadata in session object and add to session
         # Cycle through Session metadata adding to prov graph
         add_metadata_for_subject(rdf_graph_parse, s, project.graph.namespaces, session)
+        _register_loaded_record(record_map, s, session)
 
         # Query graph for acquisitions dct:isPartOf the session
         for acq in rdf_graph_parse.subjects(
@@ -776,6 +1017,7 @@ def read_nidm(nidmDoc):
                                     project.graph.namespaces,
                                     acquisition,
                                 )
+                                _register_loaded_record(record_map, acq, acquisition)
 
                             # and add acquisition object
                             acquisition_obj = MRObject(
@@ -790,6 +1032,9 @@ def read_nidm(nidmDoc):
                                 acq_obj,
                                 project.graph.namespaces,
                                 acquisition_obj,
+                            )
+                            _register_loaded_record(
+                                record_map, acq_obj, acquisition_obj
                             )
 
                             # MRI acquisitions may have an associated stimulus file so let's see if there is an entity
@@ -821,6 +1066,9 @@ def read_nidm(nidmDoc):
                                         project.graph.namespaces,
                                         events_obj,
                                     )
+                                    _register_loaded_record(
+                                        record_map, assoc_acq, events_obj
+                                    )
 
                         elif (
                             acq_obj,
@@ -839,6 +1087,7 @@ def read_nidm(nidmDoc):
                                     project.graph.namespaces,
                                     acquisition,
                                 )
+                                _register_loaded_record(record_map, acq, acquisition)
 
                             # and add acquisition object
                             acquisition_obj = AcquisitionObject(
@@ -851,6 +1100,9 @@ def read_nidm(nidmDoc):
                                 acq_obj,
                                 project.graph.namespaces,
                                 acquisition_obj,
+                            )
+                            _register_loaded_record(
+                                record_map, acq_obj, acquisition_obj
                             )
 
                         # check if this is a PET acquisition object
@@ -869,6 +1121,7 @@ def read_nidm(nidmDoc):
                                     project.graph.namespaces,
                                     acquisition,
                                 )
+                                _register_loaded_record(record_map, acq, acquisition)
 
                             # and add acquisition object
                             acquisition_obj = PETObject(
@@ -883,6 +1136,9 @@ def read_nidm(nidmDoc):
                                 acq_obj,
                                 project.graph.namespaces,
                                 acquisition_obj,
+                            )
+                            _register_loaded_record(
+                                record_map, acq_obj, acquisition_obj
                             )
 
                         # query whether this is an assessment acquisition by way of looking at the generated entity and determining
@@ -919,6 +1175,9 @@ def read_nidm(nidmDoc):
                                 project.graph.namespaces,
                                 acquisition_obj,
                             )
+                            _register_loaded_record(
+                                record_map, acq_obj, acquisition_obj
+                            )
                         # if this is a DWI scan then we could have b-value and b-vector files associated
                         elif (
                             (
@@ -946,6 +1205,7 @@ def read_nidm(nidmDoc):
                                     project.graph.namespaces,
                                     acquisition,
                                 )
+                                _register_loaded_record(record_map, acq, acquisition)
 
                             # and add acquisition object
                             acquisition_obj = AcquisitionObject(
@@ -958,6 +1218,9 @@ def read_nidm(nidmDoc):
                                 acq_obj,
                                 project.graph.namespaces,
                                 acquisition_obj,
+                            )
+                            _register_loaded_record(
+                                record_map, acq_obj, acquisition_obj
                             )
 
                 # This skips rdf_type PROV['Activity']
@@ -986,6 +1249,7 @@ def read_nidm(nidmDoc):
         add_metadata_for_subject(
             rdf_graph_parse, row["uuid"], project.graph.namespaces, de
         )
+        _register_loaded_record(record_map, row["uuid"], de)
 
         # now we need to check if there are labels for data element isAbout entries, if so add them.
         query2 = f"""
@@ -1091,6 +1355,7 @@ def read_nidm(nidmDoc):
             add_metadata_for_subject(
                 rdf_graph_parse, row["parent_act"], project.graph.namespaces, deriv_act
             )
+            _register_loaded_record(record_map, row["parent_act"], deriv_act)
         else:
             for d in project.get_derivatives:
                 if row["parent_act"] == d.get_uuid():
@@ -1105,10 +1370,11 @@ def read_nidm(nidmDoc):
         add_metadata_for_subject(
             rdf_graph_parse, row["uuid"], project.graph.namespaces, deriv_obj
         )
+        _register_loaded_record(record_map, row["uuid"], deriv_obj)
 
     # Import generic PROV records not covered by the specialized NIDM object readers.
     try:
-        _import_unmodeled_prov_branch(project, rdf_graph_parse)
+        _import_unmodeled_prov_branch(project, rdf_graph_parse, record_map=record_map)
     except Exception as e:
         logger.warning("Failed importing generic PROV branch for visualization: %s", e)
 
