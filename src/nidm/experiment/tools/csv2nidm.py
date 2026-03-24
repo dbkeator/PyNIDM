@@ -17,6 +17,7 @@ import pandas as pd
 from prov.model import Identifier, QualifiedName
 from rdflib import RDF, Graph, Literal
 from rdflib.namespace import split_uri
+from nidm import __version__ as pynidm_version
 from nidm.core import Constants
 from nidm.experiment import (
     AssessmentAcquisition,
@@ -37,6 +38,7 @@ from nidm.experiment.Query import (
 )
 from nidm.experiment.Utils import (
     add_attributes_with_cde,
+    add_export_provenance,
     addGitAnnexSources,
     csv_dd_to_json_dd,
     map_variables_to_terms,
@@ -901,6 +903,16 @@ def csv2nidm_main(args=None):
             rdf_graph.parse(source=StringIO(project.serializeTurtle()), format="turtle")
             rdf_graph = rdf_graph + cde
 
+            # add export provenance — link back to the project that was read in
+            rdf_graph = add_export_provenance(
+                rdf_graph=rdf_graph,
+                collection=project,
+                outputfile=args.nidm_file,
+                pynidm_version=pynidm_version,
+                script_name="csv2nidm.py",
+                activity_label="Add CSV data to NIDM file",
+            )
+
             if args.logfile:
                 logging.info("Backing up original NIDM file...")
             else:
@@ -1191,6 +1203,17 @@ def csv2nidm_main(args=None):
             output_file = args.output_file + ".ttl"
         else:
             output_file = args.output_file
+
+        # add export provenance
+        rdf_graph = add_export_provenance(
+            rdf_graph=rdf_graph,
+            collection=collection,
+            outputfile=output_file,
+            pynidm_version=pynidm_version,
+            script_name="csv2nidm.py",
+            activity_label="Create NIDM RDF from CSV data",
+        )
+
         rdf_graph.serialize(destination=output_file, format="turtle")
 
 

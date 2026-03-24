@@ -779,6 +779,111 @@ def normalize_prov_graph_namespaces(prov_graph):
     return prov_graph
 
 
+def add_export_provenance(
+    rdf_graph,
+    collection,
+    outputfile,
+    pynidm_version,
+    script_name,
+    activity_label,
+    output_format="turtle",
+):
+    """Add provenance triples describing the tool run that produced this NIDM file.
+
+    This is a shared utility used by bidsmri2nidm, csv2nidm, and any other
+    PyNIDM tool that writes NIDM RDF.
+
+    :param rdf_graph: rdflib.Graph to add provenance triples to
+    :param collection: prov Collection / Entity that was used as input (or None)
+    :param outputfile: path to the output file being written
+    :param pynidm_version: PyNIDM version string
+    :param script_name: name of the calling script (e.g. "csv2nidm.py")
+    :param activity_label: human-readable label for the export activity
+        (e.g. "Add CSV data to NIDM file")
+    :param output_format: serialization format label (default "turtle")
+    :return: the rdf_graph (modified in place)
+    """
+    from datetime import datetime, timezone
+    import platform
+    from nidm.experiment.Core import getUUID
+
+    prov_ns = Namespace("http://www.w3.org/ns/prov#")
+    rdfs_ns = Namespace("http://www.w3.org/2000/01/rdf-schema#")
+    dct_ns = Namespace("http://purl.org/dc/terms/")
+    schema_ns = Namespace("https://schema.org/")
+    nfo_ns = Namespace("http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#")
+    nidm_ns = Namespace("http://purl.org/nidash/nidm#")
+
+    export_activity = Constants.NIIRI[getUUID()]
+    software_agent = Constants.NIIRI[getUUID()]
+    output_entity = Constants.NIIRI[getUUID()]
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    python_version = platform.python_version()
+    output_basename = os.path.basename(outputfile)
+
+    rdf_graph.add((export_activity, RDF.type, prov_ns["Activity"]))
+    rdf_graph.add((export_activity, rdfs_ns["label"], Literal(activity_label)))
+    rdf_graph.add((export_activity, prov_ns["startedAtTime"], Literal(timestamp)))
+    rdf_graph.add((export_activity, prov_ns["endedAtTime"], Literal(timestamp)))
+    rdf_graph.add((export_activity, nidm_ns["outputFormat"], Literal(output_format)))
+
+    rdf_graph.add((software_agent, RDF.type, prov_ns["SoftwareAgent"]))
+    rdf_graph.add(
+        (
+            software_agent,
+            rdfs_ns["label"],
+            Literal(f"PyNIDM {script_name}"),
+        )
+    )
+    rdf_graph.add((software_agent, schema_ns["name"], Literal("PyNIDM")))
+    rdf_graph.add(
+        (
+            software_agent,
+            schema_ns["softwareVersion"],
+            Literal(pynidm_version),
+        )
+    )
+    rdf_graph.add(
+        (
+            software_agent,
+            nidm_ns["softwareVersion"],
+            Literal(pynidm_version),
+        )
+    )
+    rdf_graph.add((software_agent, nidm_ns["command"], Literal(script_name)))
+    rdf_graph.add(
+        (
+            software_agent,
+            schema_ns["runtimePlatform"],
+            Literal(f"Python {python_version}"),
+        )
+    )
+
+    rdf_graph.add((output_entity, RDF.type, prov_ns["Entity"]))
+    rdf_graph.add((output_entity, rdfs_ns["label"], Literal("NIDM RDF document")))
+    rdf_graph.add((output_entity, nfo_ns["filename"], Literal(output_basename)))
+    rdf_graph.add((output_entity, dct_ns["format"], Literal(output_format)))
+    rdf_graph.add((output_entity, nidm_ns["outputFormat"], Literal(output_format)))
+
+    rdf_graph.add((output_entity, prov_ns["wasGeneratedBy"], export_activity))
+    rdf_graph.add((export_activity, prov_ns["wasAssociatedWith"], software_agent))
+
+    if collection is not None:
+        collection_id = getattr(collection, "identifier", collection)
+        if isinstance(collection_id, (URIRef, BNode, Literal)):
+            collection_node = collection_id
+        else:
+            collection_str = str(collection_id)
+            if collection_str.startswith("niiri:"):
+                collection_node = Constants.NIIRI[collection_str.split(":", 1)[1]]
+            else:
+                collection_node = URIRef(collection_str)
+        rdf_graph.add((export_activity, prov_ns["used"], collection_node))
+
+    return rdf_graph
+
+
 def _install_lossless_serialize(
     prov_graph, original_rdf_graph, original_text=None, original_format="turtle"
 ):
