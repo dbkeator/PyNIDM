@@ -1244,7 +1244,32 @@ def read_nidm(nidmDoc):
         # print(f"Reading data element: {row}")
         # instantiate a data element class assigning it the existing uuid
         obj_nm, obj_term = split_uri(row["uuid"])
-        de = DataElement(project=project, uuid=obj_term, add_default_type=False)
+
+        # Resolve the original namespace so the DataElement identifier is
+        # lossless (e.g. fmriprep:csf_mean stays fmriprep:, not niiri:).
+        de_ns = None
+        if str(obj_nm) != str(Constants.NIIRI):
+            found_uri, found_nm = find_in_namespaces(
+                search_uri=URIRef(obj_nm), namespaces=project.graph.namespaces
+            )
+            if found_uri:
+                de_ns = found_nm
+            else:
+                # Namespace not yet registered — create one from the prefix
+                # used in the RDF file.
+                for prefix, ns_uri in rdf_graph_parse.namespaces():
+                    if str(ns_uri) == str(obj_nm):
+                        de_ns = pm.Namespace(prefix, str(obj_nm))
+                        break
+                if de_ns is None:
+                    de_ns = pm.Namespace("ns_" + obj_term, str(obj_nm))
+
+        de = DataElement(
+            project=project,
+            uuid=obj_term,
+            add_default_type=False,
+            namespace=de_ns,
+        )
         # get the rest of the attributes for this data element and store
         add_metadata_for_subject(
             rdf_graph_parse, row["uuid"], project.graph.namespaces, de
