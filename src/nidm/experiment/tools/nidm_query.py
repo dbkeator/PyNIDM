@@ -215,10 +215,7 @@ def query(
             # get project UUID
             project = GetProjectsUUID([nidm_file])
             uri = (
-                "/projects/"
-                + project[0].toPython().split("/")[-1]
-                + "?fields="
-                + get_fields
+                "/projects/" + str(project[0]).split("/")[-1] + "?fields=" + get_fields
             )
             # get fields output from each file and concatenate
             if output_file is None:
