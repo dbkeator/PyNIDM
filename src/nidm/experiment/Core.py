@@ -1,10 +1,14 @@
 from collections import OrderedDict
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import random
 import re
+import shutil
 import string
+import subprocess
+import tempfile
 import uuid
 from prov.dot import prov_to_dot
 import prov.model as pm
@@ -529,16 +533,19 @@ class Core:
         """
         Save provenance graph with manual isPartOf edges.
 
-        This version always writes a PNG alongside the requested output, because
-        PNG is more broadly viewable than SVG and avoids the PDF clipping issue.
+        *format* can be ``"svg"`` (default), ``"png"``, or ``"pdf"``.
+        SVG is recommended for large graphs — it opens in any browser
+        with unlimited scroll and zoom.
         """
         from ..experiment.Utils import normalize_prov_graph_namespaces
 
         normalize_prov_graph_namespaces(self.graph)
         dot = prov_to_dot(self.graph)
 
-        # Use a left-to-right layout so wide top rows become vertical stacks.
-        dot.set_rankdir("LR")
+        # Top-to-bottom layout: ranks stack downward, nodes within each rank
+        # spread horizontally → produces a wide, short graph that is easy to
+        # scroll left/right in a PDF viewer.
+        dot.set_rankdir("TB")
         dot.set_ranksep("0.5")
         dot.set_nodesep("0.15")
         dot.set_overlap("false")
@@ -546,11 +553,9 @@ class Core:
         dot.set_concentrate("false")
         dot.set("outputorder", "edgesfirst")
         dot.set("newrank", "true")
-        dot.set("ratio", "compress")
         dot.set("center", "true")
-        dot.set("pad", "0.4")
-        dot.set("margin", "0.25")
-        dot.set("dpi", "200")
+        dot.set("pad", "0.5")
+        dot.set("margin", "0.5")
 
         for node in dot.get_nodes():
             node.set_fontsize("9")
@@ -664,14 +669,41 @@ class Core:
                 add_edge_if_found(derivative_node, project_node)
 
         out_path = Path(filename)
-        requested_format = format if format not in (None, "None") else "pdf"
+        requested_format = format if format not in (None, "None") else "svg"
 
-        # Always write a PNG because it is the most reliable broadly viewable output.
-        png_path = out_path.with_suffix(".png")
-        dot.write(str(png_path), format="png")
+        if requested_format == "svg":
+            svg_path = out_path.with_suffix(".svg")
+            dot.write(str(svg_path), format="svg")
 
-        # Also write the requested format for compatibility.
-        dot.write(str(out_path), format=requested_format)
+        elif requested_format == "png":
+            # High DPI for crisp raster output.
+            dot.set("dpi", "200")
+            png_path = out_path.with_suffix(".png")
+            dot.write(str(png_path), format="png")
+
+        elif requested_format == "pdf":
+            # Graphviz's direct PDF renderer is known to clip large graphs.
+            # The workaround is: render to EPS (which embeds a correct
+            # BoundingBox), then convert EPS → PDF with ps2pdf using
+            # -dEPSCrop so the PDF page matches the actual graph size.
+            # Note: very large graphs may still exceed PDF page-size
+            # limits in some viewers.  Use SVG for best results.
+            pdf_path = out_path.with_suffix(".pdf")
+            ps2pdf = shutil.which("ps2pdf")
+            if ps2pdf:
+                with tempfile.NamedTemporaryFile(suffix=".eps", delete=False) as tmp:
+                    tmp_eps = tmp.name
+                try:
+                    dot.write(tmp_eps, format="eps")
+                    subprocess.run(
+                        [ps2pdf, "-dEPSCrop", tmp_eps, str(pdf_path)],
+                        check=True,
+                    )
+                finally:
+                    os.unlink(tmp_eps)
+            else:
+                # Fallback: direct PDF (may clip on very large graphs).
+                dot.write(str(pdf_path), format="pdf")
 
     def prefix_to_context(self):
         """
