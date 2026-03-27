@@ -698,9 +698,10 @@ def queryai(nidm_file_list, question, output_file, show_query):
             name = concept.get("name", "unknown")
             role = concept.get("role", "other")
 
-            # "identifier" means subject ID — handled by the query pattern
-            # (ndar:src_subject_id). Don't try to resolve it as a DE.
-            if role == "identifier":
+            # Roles that never need DataElement resolution:
+            #  - "identifier": subject ID, handled by ndar:src_subject_id
+            #  - "aggregate": COUNT/AVG/etc. — operations, not data variables
+            if role in ("identifier", "aggregate"):
                 resolved_vars.append(
                     {
                         "name": name,
