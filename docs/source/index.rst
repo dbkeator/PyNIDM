@@ -256,6 +256,116 @@ This function provides query support for NIDM graphs.
       -v, --verbosity TEXT            Verbosity level 0-5, 0 is default
       --help                          Show this message and exit.
 
+QueryAI — AI-Assisted Natural Language Query
+---------------------------------------------
+This tool translates natural-language questions about your NIDM data into
+SPARQL queries using an LLM (Anthropic Claude or OpenAI GPT).  It uses a
+two-phase approach:
+
+1. **Phase 1 — Concept Resolution:** The AI extracts variable concepts
+   (e.g. "age", "left hippocampus volume") from your question.  The tool
+   then resolves each concept to the exact DataElement URI in your NIDM
+   files by matching on ``nidm:isAbout`` (preferred) or
+   ``nidm:sourceVariable`` properties.  If multiple DataElements match,
+   you are prompted to select the correct one(s).
+
+2. **Phase 2 — SPARQL Generation:** The resolved URIs, along with the
+   NIDM graph structure (loaded from the bundled ``nidm_schema.json``),
+   are sent to the LLM which generates a SPARQL query.  The query is
+   executed locally against your NIDM files via rdflib — **no subject
+   data leaves your machine**.
+
+.. code:: bash
+
+   Usage: pynidm queryai [OPTIONS]
+
+   Options:
+     -nl, --nidm_file_list TEXT  A comma separated list of NIDM files with
+                                 full path  [required]
+     -q, --question TEXT         Natural-language question to ask about the
+                                 NIDM data.  If not provided, enters
+                                 interactive mode.
+     -o, --output_file PATH      Optional output file for results (TSV format)
+     -s, --show_query            Show the generated SPARQL query before
+                                 executing it
+     --help                      Show this message and exit.
+
+**Prerequisites:**
+
+An API key for either Anthropic or OpenAI is required.  Set one of:
+
+.. code:: bash
+
+   export ANTHROPIC_API_KEY=sk-ant-...
+   export OPENAI_API_KEY=sk-...
+
+Or create a config file at ``~/.pynidm/config.json``:
+
+.. code:: json
+
+   {"provider": "anthropic", "api_key": "sk-ant-..."}
+
+**Example 1 — Count subjects:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl -q "How many subjects are there?" -s
+
+**Example 2 — Average age:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl -q "What is the average age of all subjects?" -s
+
+**Example 3 — Complex cross-entity query with brain volumes:**
+
+.. code:: bash
+
+   pynidm queryai \
+       -nl nidm.ttl,fs_cde.ttl,fsl_cde.ttl,ants_cde.ttl \
+       -q "For each subject, get their ID, age, sex, diagnosis, and the left hippocampus volume from FreeSurfer, FSL, and/or ANTS with a column indicating the software tool that produced it" \
+       -s
+
+When multiple DataElements match a concept (e.g. left hippocampus volume
+from both FreeSurfer and ANTs), you will be prompted to select::
+
+   Multiple DataElements match 'left hippocampus volume':
+     [1] ants:ants_000040 | label="Left-Hippocampus Volume (mm^3)" | laterality=Left
+     [2] fs:fs_003343 | label="Left-Hippocampus Volume_mm3 (mm^3)" | laterality=Left
+     [a] Select all
+     [0] Skip this variable
+
+   Enter one number, multiple numbers separated by commas (e.g. 2,3),
+   'a' for all, or 0 to skip.
+
+**Example 4 — Interactive mode:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl
+
+   NIDM AI Query - Interactive Mode
+   Type your question and press Enter. Type 'quit' to exit.
+
+   Question: How many subjects have a diagnosis of autism?
+   ...
+
+**Demo Script:**
+
+A demo script that automatically downloads sample NIDM data from public
+GitHub repositories and runs several example queries is included at
+``src/nidm/experiment/tools/examples/queryai_demo.sh``.  See the
+`queryai_demo.sh source
+<https://github.com/incf-nidash/PyNIDM/blob/master/src/nidm/experiment/tools/examples/queryai_demo.sh>`_
+for details.
+
+.. code:: bash
+
+   chmod +x src/nidm/experiment/tools/examples/queryai_demo.sh
+   ./src/nidm/experiment/tools/examples/queryai_demo.sh       # run all queries
+   ./src/nidm/experiment/tools/examples/queryai_demo.sh 1 3   # run queries 1 and 3
+
+
 linear_regression
 -----------------
 This function provides linear regression support for NIDM graphs.
