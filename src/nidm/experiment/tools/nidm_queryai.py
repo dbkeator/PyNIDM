@@ -26,6 +26,8 @@ RDFS = Namespace("http://www.w3.org/2000/01/rdf-schema#")
 DCT = Namespace("http://purl.org/dc/terms/")
 RDF_NS = Namespace("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
 
+_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "nidm_schema.json"
+
 # ---------------------------------------------------------------------------
 # DataElement extraction
 # ---------------------------------------------------------------------------
@@ -182,12 +184,15 @@ def _resolve_concept(concept_name, data_elements, concept_hints=None):
             matches.append(de)
 
     # --- Strategy 3b: Looser match on sourceVariable -------------------
+    # Use word boundary matching to avoid "ant" matching "stimulants"
     if not matches:
         for de in data_elements:
             sv = de.get("source_variable", "").lower()
             if sv and concept_lower in sv:
                 matches.append(de)
-            elif sv and any(kw in sv for kw in keywords):
+            elif sv and any(
+                re.search(r"\b" + re.escape(kw) + r"\b", sv) for kw in keywords
+            ):
                 matches.append(de)
 
     return matches
@@ -225,18 +230,22 @@ def _ask_user_to_pick(concept_name, matches):
     """
     n = len(matches)
     click.echo(
-        f"\nMultiple DataElements match '{concept_name}'. "
-        f"Select one or more (comma-separated), or 'a' for all:",
+        f"\nMultiple DataElements match '{concept_name}':",
         err=True,
     )
     for i, de in enumerate(matches):
         click.echo(_format_de_for_display(de, index=i + 1), err=True)
     click.echo("  [a] Select all", err=True)
     click.echo("  [0] Skip this variable", err=True)
+    click.echo(
+        "\nEnter one number, multiple numbers separated by commas "
+        "(e.g. 2,3), 'a' for all, or 0 to skip.",
+        err=True,
+    )
 
     while True:
         try:
-            raw = input(f"Enter choice (1-{n}, 'a' for all, or 0 to skip): ").strip()
+            raw = input("Your choice: ").strip()
         except (EOFError, KeyboardInterrupt):
             return None
         if raw == "0":
@@ -318,6 +327,83 @@ def _extract_concepts_from_question(question):
 
 
 # ---------------------------------------------------------------------------
+# Schema loading
+# ---------------------------------------------------------------------------
+
+
+def _load_schema_context():
+    """Load the NIDM LinkML schema and extract structural context for the AI.
+
+    Returns a string describing the graph hierarchy, class relationships,
+    example SPARQL patterns, and important notes — all derived from the schema
+    rather than hardcoded.
+    """
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    sections = []
+
+    # 1. Graph hierarchy (from annotations)
+    annotations = schema.get("annotations", {})
+    if "graph_hierarchy" in annotations:
+        sections.append(
+            "### Graph Hierarchy\n```\n" + annotations["graph_hierarchy"] + "\n```"
+        )
+
+    # 2. Class descriptions and relationships
+    classes = schema.get("classes", {})
+    class_lines = []
+    for cls_name, cls_def in classes.items():
+        desc = cls_def.get("description", "")
+        uri = cls_def.get("class_uri", "")
+        comments = cls_def.get("comments", [])
+        parent = cls_def.get("is_a", "")
+
+        line = f"**{cls_name}** (`{uri}`)"
+        if parent:
+            line += f" — subclass of {parent}"
+        line += f"\n  {desc}"
+        for c in comments:
+            line += f"\n  - {c}"
+
+        # List key attributes with their slot_uri
+        attrs = cls_def.get("attributes", {})
+        if attrs:
+            attr_lines = []
+            for attr_name, attr_def in attrs.items():
+                slot_uri = attr_def.get("slot_uri", "")
+                attr_desc = attr_def.get("description", "")
+                attr_range = attr_def.get("range", "")
+                if slot_uri:
+                    attr_lines.append(
+                        f"    {attr_name}: `{slot_uri}` "
+                        f"-> {attr_range} — {attr_desc}"
+                    )
+            if attr_lines:
+                line += "\n  Attributes:\n" + "\n".join(attr_lines)
+
+        class_lines.append(line)
+
+    sections.append("### Classes\n\n" + "\n\n".join(class_lines))
+
+    # 3. Example SPARQL patterns
+    sparql_examples = []
+    for key, val in annotations.items():
+        if key.startswith("sparql_"):
+            label = key.replace("sparql_", "").replace("_", " ").title()
+            sparql_examples.append(f"**{label}:**\n```sparql\n{val}\n```")
+    if sparql_examples:
+        sections.append(
+            "### Example SPARQL Patterns\n\n" + "\n\n".join(sparql_examples)
+        )
+
+    # 4. Important notes
+    if "important_notes" in annotations:
+        sections.append("### Important Notes\n" + annotations["important_notes"])
+
+    return "\n\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
 # Phase 2:  SPARQL generation with resolved URIs
 # ---------------------------------------------------------------------------
 
@@ -325,9 +411,13 @@ def _extract_concepts_from_question(question):
 def _build_sparql_prompt(resolved_vars, prefixes, projects):
     """Build the system prompt for SPARQL generation.
 
-    *resolved_vars* is a list of dicts, each with:
-      - name, role, qname, uri, label, laterality, ...
+    Loads the NIDM schema to teach the AI about graph structure, then adds
+    the resolved variable URIs.  *resolved_vars* is a list of dicts, each
+    with: name, role, qname, uri, label, laterality, ...
     """
+    # Load structural context from the schema document
+    schema_context = _load_schema_context()
+
     prefix_block = "\n".join(
         f"PREFIX {p}: <{uri}>" for p, uri in sorted(prefixes.items())
     )
@@ -342,8 +432,9 @@ def _build_sparql_prompt(resolved_vars, prefixes, projects):
     for v in resolved_vars:
         var_block += f"  - Concept: {v['name']}\n"
         var_block += f"    Role: {v['role']}\n"
-        var_block += f"    USE THIS EXACT URI AS PREDICATE: {v['qname']}\n"
-        var_block += f"    Full URI: <{v['uri']}>\n"
+        if v.get("qname"):
+            var_block += f"    USE THIS EXACT URI AS PREDICATE: {v['qname']}\n"
+            var_block += f"    Full URI: <{v['uri']}>\n"
         if v.get("label"):
             var_block += f"    Label: {v['label']}\n"
         if v.get("laterality"):
@@ -361,52 +452,29 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
 
 {var_block}
 
-## NIDM QUERY PATTERNS
+## NIDM GRAPH STRUCTURE (from schema)
 
-### Get subject ID:
-```sparql
-?acq prov:qualifiedAssociation [prov:agent ?person] .
-?person ndar:src_subject_id ?subject_id .
-```
+{schema_context}
 
-### Get a variable value from an entity:
-```sparql
-?entity prov:wasGeneratedBy ?acq .
-?entity <EXACT_DE_URI> ?value .
-```
+## CRITICAL QUERY RULES
 
-### Demographics (age, sex, diagnosis, etc.) are ALL on ONE entity:
-All demographic variables are stored as predicates on the SAME entity,
-generated by a single assessment acquisition.
-```sparql
-?demo_acq prov:qualifiedAssociation [prov:agent ?p1] .
-?p1 ndar:src_subject_id ?ID .
-?demo_ent prov:wasGeneratedBy ?demo_acq .
-?demo_ent <AGE_URI> ?age .
-?demo_ent <SEX_URI> ?sex .
-?demo_ent <DX_URI> ?dx .
-```
+1. **Demographics (age, sex, diagnosis) are ALL on ONE entity.**
+   Use a single ?demo_ent with multiple DE predicates.
 
-### Brain measurements are on SEPARATE entities from demographics.
-Join by subject ID:
-```sparql
-?meas_acq prov:qualifiedAssociation [prov:agent ?p2] .
-?p2 ndar:src_subject_id ?ID .
-?meas_ent prov:wasGeneratedBy ?meas_acq .
-?meas_ent <VOLUME_URI> ?volume .
-```
+2. **Brain measurements are on SEPARATE entities from demographics.**
+   Join demographics and measurements by matching subject ID (?ID).
 
-### Software tool info:
-SoftwareAgents are typed `a prov:SoftwareAgent` (NEVER use prov:type).
-They do NOT have rdfs:label. They have nidm:NIDM_0000164 for tool namespace.
-```sparql
-?meas_acq prov:qualifiedAssociation [prov:agent ?tool] .
-?tool a prov:SoftwareAgent ; nidm:NIDM_0000164 ?tool_ns .
-```
+3. **SoftwareAgents:** Use `a prov:SoftwareAgent` (rdf:type), NEVER
+   `prov:type`. They have `nidm:NIDM_0000164` for the tool namespace URI.
 
-### Numeric values:
-Values are often xsd:string. For numeric ops: `xsd:float(?val)`.
-Filter: `FILTER(?val != "n/a" && ?val != "" && BOUND(?val))`
+4. **Numeric values:** Values are often xsd:string. For numeric ops cast
+   with `xsd:float(?val)`.
+   Filter: `FILTER(?val != "n/a" && ?val != "" && BOUND(?val))`
+
+5. **Use EXACT URIs from RESOLVED VARIABLES as predicates.**
+   Do NOT invent, guess, or modify any URI. If a variable has no resolved
+   URI (role is identifier/aggregate/software), follow the schema patterns
+   instead.  NEVER use placeholders like <YOUR_URI_HERE>.
 
 ## Available Prefixes
 ```sparql
@@ -418,12 +486,8 @@ Filter: `FILTER(?val != "n/a" && ?val != "" && BOUND(?val))`
 
 ## Instructions
 1. Use the EXACT URIs from RESOLVED VARIABLES above as predicates.
-   Do NOT invent, guess, or modify any URI.  If a variable has no
-   resolved URI, OMIT it from the query entirely — never use placeholders.
-2. Follow the patterns above for the query structure.
-3. Include a PREFIX declaration for EVERY namespace prefix you use
-   (prov, ndar, niiri, fs, nidm, xsd, rdfs, etc.).  Copy from the
-   Available Prefixes list above.
+2. Refer to the NIDM GRAPH STRUCTURE for how to traverse the graph.
+3. Include a PREFIX declaration for EVERY namespace prefix you use.
 4. Return ONLY the SPARQL in a ```sparql block.
 """
 
@@ -701,7 +765,15 @@ def queryai(nidm_file_list, question, output_file, show_query):
             # Roles that never need DataElement resolution:
             #  - "identifier": subject ID, handled by ndar:src_subject_id
             #  - "aggregate": COUNT/AVG/etc. — operations, not data variables
-            if role in ("identifier", "aggregate"):
+            #  - "software": tools (FreeSurfer, FSL, ANTs) are SoftwareAgents
+            #    identified via nidm:NIDM_0000164, not DataElements
+            if role in ("identifier", "aggregate", "software"):
+                if role == "software":
+                    click.echo(
+                        f"  '{name}' is a software tool; handled by "
+                        f"SoftwareAgent query pattern.",
+                        err=True,
+                    )
                 resolved_vars.append(
                     {
                         "name": name,
@@ -723,29 +795,11 @@ def queryai(nidm_file_list, question, output_file, show_query):
                         break
 
             if not matches:
-                if role in ("software", "aggregate", "other"):
-                    # Non-data concepts (e.g. "FreeSurfer", "average")
-                    # — no DE needed. Pass through so SPARQL generator
-                    # knows to include the pattern (SoftwareAgent, etc.)
-                    click.echo(
-                        f"  '{name}' is not a DataElement "
-                        f"(role={role}); handled by query pattern.",
-                        err=True,
-                    )
-                    resolved_vars.append(
-                        {
-                            "name": name,
-                            "role": role,
-                            "qname": None,
-                            "uri": None,
-                        }
-                    )
-                else:
-                    click.echo(
-                        f"  WARNING: No DataElement found for '{name}'. "
-                        f"This variable will be omitted from the query.",
-                        err=True,
-                    )
+                click.echo(
+                    f"  WARNING: No DataElement found for '{name}'. "
+                    f"This variable will be omitted from the query.",
+                    err=True,
+                )
                 continue
             elif len(matches) == 1:
                 selected_list = [matches[0]]
