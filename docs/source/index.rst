@@ -74,7 +74,8 @@ elements is described in `Keator et al., Frontiers in Neuroinformatics 2023
 `NIDM-Terms repository <https://github.com/NIDM-Terms/terms>`_.
 
 A formal `LinkML <https://linkml.io>`_ schema documenting the complete graph
-structure is provided at ``src/nidm/experiment/schema/nidm_schema.yaml``.
+structure is provided at
+`src/nidm/experiment/schema/nidm_schema.yaml <https://github.com/dbkeator/PyNIDM/blob/master/src/nidm/experiment/schema/nidm_schema.yaml>`_.
 
 Graph Hierarchy
 ---------------
