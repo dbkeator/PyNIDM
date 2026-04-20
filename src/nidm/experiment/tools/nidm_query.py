@@ -264,7 +264,9 @@ def query(
         else:
             print(brainvol.to_string())
     elif query_file:
-        df = sparql_query_nidm(nidm_file_list.split(","), query_file, output_file)
+        df = sparql_query_nidm(
+            nidm_file_list.split(","), query_file.read(), output_file
+        )
 
         if (output_file) is None:
             print(df.to_string())
