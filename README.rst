@@ -76,6 +76,279 @@ or feature requests can also be submitted as issues. Note, we are a small band
 of researchers who mostly volunteer our time to this project.  We will respond
 as quickly as possible.
 
+NIDM Model Details
+==================
+
+NIDM files (typically ``nidm.ttl``) are `RDF Turtle
+<https://www.w3.org/TR/turtle/>`_ documents that represent neuroimaging study
+data using the `W3C PROV <https://www.w3.org/TR/prov-overview/>`_ provenance
+data model.  Every entity, activity, and agent is identified by a URI and
+connected by typed RDF triples, making NIDM data machine-readable, semantically
+rich, and interoperable across sites and tools.
+
+The terms and classes used in NIDM documents are formally defined in the
+`NIDM-Experiment ontology <https://incf-nidash.github.io/nidm-experiment/>`_.
+Community-based management of the controlled vocabulary used to annotate data
+elements is described in `Keator et al., Frontiers in Neuroinformatics 2023
+<https://doi.org/10.3389/fninf.2023.1174156>`_ and maintained in the
+`NIDM-Terms repository <https://github.com/NIDM-Terms/terms>`_.
+
+A formal `LinkML <https://linkml.io>`_ schema documenting the complete graph
+structure is provided at ``src/nidm/experiment/schema/nidm_schema.yaml``.
+
+Graph Hierarchy
+---------------
+
+A NIDM graph is organized as a hierarchy of W3C PROV objects.  Each node
+carries one or more ``rdf:type`` assertions — one NIDM-specific type giving
+its scientific role, and one PROV type giving its provenance role::
+
+    Project  (nidm:Project + prov:Activity)
+    │
+    ├── Session  (nidm:Session + prov:Activity)          [dct:isPartOf → Project]
+    │    │
+    │    └── Acquisition  (nidm:Acquisition + prov:Activity)
+    │         │                                          [dct:isPartOf → Session]
+    │         └── AcquisitionObject  (nidm:AcquisitionObject + prov:Entity)
+    │                                    [prov:wasGeneratedBy → Acquisition]
+    │                                    [variable values stored as RDF properties]
+    │
+    ├── DataElement  (nidm:DataElement / nidm:PersonalDataElement + prov:Entity)
+    │
+    └── Derivative  (nidm:Derivative + prov:Activity)   [dct:isPartOf → Project]
+         │
+         └── DerivativeObject  (prov:Entity)            [prov:wasGeneratedBy → Derivative]
+                                    [derived values stored as RDF properties]
+
+**Project** is the top-level container for a study or dataset, holding title,
+license, funding, and versioning metadata.
+
+**Session** groups the acquisitions for one participant visit.
+
+**Acquisition** represents a single data-collection event — an MRI scan, a
+questionnaire, or a demographic entry.  Imaging acquisitions carry
+``nidm:hadAcquisitionModality``, ``nidm:hadImageContrastType``, and
+``nidm:hadImageUsageType``.
+
+**AcquisitionObject** is the entity produced by an Acquisition.  For imaging
+data it stores the filename and checksum; for assessments and demographics it
+stores measured values as RDF properties, using DataElement URIs as predicates.
+
+**Derivative / DerivativeObject** represent post-processing pipelines
+(FreeSurfer, FSL, ANTs, etc.) and the analysis results they produce.
+
+Participant Linkage
+-------------------
+
+Participants are ``prov:Person`` agents linked to Acquisitions through PROV's
+qualified-association pattern::
+
+    Acquisition
+      └── prov:qualifiedAssociation
+            └── prov:Association  (blank node)
+                  ├── prov:agent    ──►  Person
+                  │                       └── ndar:src_subject_id  "sub-001"
+                  └── prov:hadRole  ──►  sio:Subject
+
+``ndar:src_subject_id`` on the ``Person`` node is the primary
+human-readable participant identifier across all PyNIDM query operations.
+
+DataElements and Measurement Values
+------------------------------------
+
+DataElements define the semantics of every measured variable — its label,
+data type, units, valid range, and linkage to a shared ontology concept via
+``nidm:isAbout``.  Linking variables to concepts from the
+`NIDM-Experiment ontology <https://incf-nidash.github.io/nidm-experiment/>`_
+or community registries such as `InterLex <https://scicrunch.org/nidm-terms>`_
+enables federated queries across datasets that use different local variable
+names for the same underlying concept.
+
+DataElement URIs serve a **dual role** in the graph:
+
+1. **As subjects** — the DataElement URI carries all metadata about the
+   variable (label, units, ontology mapping, etc.).
+2. **As predicates** — the same URI is used as the RDF predicate on
+   AcquisitionObjects and DerivativeObjects to store actual measured values.
+
+A **PersonalDataElement** (demographic or assessment variable) in Turtle::
+
+    niiri:gender_hrg8rh  a nidm:PersonalDataElement, prov:Entity ;
+        rdfs:label              "gender" ;
+        dct:description         "Gender of participant" ;
+        nidm:sourceVariable     "gender" ;
+        nidm:isAbout            ilx:ilx_0101292 ;
+        nidm:valueType          xsd:complexType ;
+        nidm:minValue           "NA" ;
+        nidm:maxValue           "NA" ;
+        reproschema:choices     [ rdfs:label "male"   ; reproschema:value "1" ],
+                                [ rdfs:label "female" ; reproschema:value "2" ] ;
+        ilx:ilx_0739289         "NIDM" .
+
+    # Same DataElement URI used as a predicate to store a subject's value:
+    niiri:acqobj_abc123  prov:wasGeneratedBy niiri:acq_456 ;
+                         niiri:gender_hrg8rh  "1"^^xsd:string .
+
+An **imaging pipeline DataElement** (e.g. from FreeSurfer)::
+
+    fs:fs_000003  a nidm:DataElement ;
+        rdfs:label           "Brain Segmentation Volume (mm^3)" ;
+        nidm:isAbout         obo:UBERON_0000955 ;
+        nidm:measureOf       ilx:ilx_0112559 ;
+        nidm:datumType       ilx:ilx_0738276 ;
+        nidm:unitCode        "mm^3" ;
+        nidm:hasLaterality   "Bilateral" .
+
+DataElement Property Reference
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
++----------------------------------+----------------------------------------------------------+
+| RDF Predicate                    | Description                                              |
++==================================+==========================================================+
+| ``rdf:type``                     | ``nidm:PersonalDataElement`` (demographic /              |
+|                                  | assessment) or ``nidm:DataElement`` (imaging             |
+|                                  | pipeline CDE), always combined with ``prov:Entity``      |
++----------------------------------+----------------------------------------------------------+
+| ``rdfs:label``                   | Human-readable variable name                             |
++----------------------------------+----------------------------------------------------------+
+| ``dct:description``              | Free-text description of the variable                    |
++----------------------------------+----------------------------------------------------------+
+| ``rdfs:comment``                 | Longer formal definition (used when importing            |
+|                                  | terms from external registries)                          |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:sourceVariable``          | Original column / variable name in the source            |
+|                                  | dataset                                                  |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:isAbout``                 | URI of the ontology concept this variable                |
+|                                  | represents (e.g. ``ilx:ilx_0100400`` for age).           |
+|                                  | The key property enabling cross-dataset                  |
+|                                  | concept-based federated queries.  See the                |
+|                                  | `NIDM-Experiment ontology                                |
+|                                  | <https://incf-nidash.github.io/nidm-experiment/>`_       |
+|                                  | and `InterLex <https://scicrunch.org/nidm-terms>`_       |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:valueType``               | XSD datatype URI for the variable's values:              |
+|                                  | ``xsd:float``, ``xsd:integer``, ``xsd:string``,          |
+|                                  | ``xsd:boolean``, or ``xsd:complexType`` for              |
+|                                  | categorical variables                                    |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:minValue``                | Minimum allowed value (``"NA"`` if not applicable)       |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:maxValue``                | Maximum allowed value (``"NA"`` if not applicable)       |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:unitCode``                | Unit of measurement string (e.g. ``"mm^3"``,             |
+|                                  | ``"years"``, ``"vertex"``)                               |
++----------------------------------+----------------------------------------------------------+
+| ``reproschema:choices``          | Categorical response options.  Each choice is a          |
+|                                  | blank node with ``rdfs:label`` (display text) and        |
+|                                  | ``reproschema:value`` (stored code), or a plain          |
+|                                  | literal string for simple enumerations                   |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:measureOf``               | URI of the physical / biological property being          |
+|                                  | measured (e.g. ``ilx:ilx_0112559`` for volume,           |
+|                                  | ``obo:PATO_0001323`` for surface area).  Used            |
+|                                  | primarily in imaging pipeline CDEs                       |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:datumType``               | URI of the measurement datum type (e.g.                  |
+|                                  | ``ilx:ilx_0738276`` for scalar,                          |
+|                                  | ``ilx:ilx_0102597`` for count).  Used primarily          |
+|                                  | in imaging pipeline CDEs                                 |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:hasLaterality``           | Brain laterality: ``"Left"``, ``"Right"``, or            |
+|                                  | ``"Bilateral"``.  Used in imaging pipeline CDEs          |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:url``                     | URL linking to this variable's entry in a                |
+|                                  | terminology registry (e.g. InterLex / SciCrunch)         |
++----------------------------------+----------------------------------------------------------+
+| ``nidm:sameAs``                  | URI of an equivalent term in another vocabulary          |
++----------------------------------+----------------------------------------------------------+
+| ``bids:allowableValues``         | Allowable values for BIDS-sourced variables              |
++----------------------------------+----------------------------------------------------------+
+| ``ilx:ilx_0739289``              | Terminology provenance tag (e.g. ``"NIDM"``)             |
+|                                  | indicating which controlled vocabulary sourced           |
+|                                  | this term                                                |
++----------------------------------+----------------------------------------------------------+
+
+Key Namespaces
+--------------
+
+::
+
+    nidm:          http://purl.org/nidash/nidm#
+    prov:          http://www.w3.org/ns/prov#
+    niiri:         http://iri.nidash.org/              (instance identifiers)
+    ndar:          https://ndar.nih.gov/api/datadictionary/v2/dataelement/
+    dct:           http://purl.org/dc/terms/
+    dctypes:       http://purl.org/dc/dcmitype/
+    sio:           http://semanticscience.org/ontology/sio.owl#
+    obo:           http://purl.obolibrary.org/obo/
+    onli:          http://neurolog.unice.fr/ontoneurolog/v3.0/instrument.owl#
+    reproschema:   http://schema.repronim.org/
+    ilx:           http://uri.interlex.org/
+    freesurfer:    https://surfer.nmr.mgh.harvard.edu/
+    fsl:           http://purl.org/nidash/fsl#
+    ants:          http://stnava.github.io/ANTs/
+    bids:          http://bids.neuroimaging.io/
+
+Example SPARQL Queries
+----------------------
+
+List all projects and their titles:
+
+.. code:: sparql
+
+    PREFIX nidm:    <http://purl.org/nidash/nidm#>
+    PREFIX dctypes: <http://purl.org/dc/dcmitype/>
+
+    SELECT ?project ?title WHERE {
+      ?project a nidm:Project .
+      OPTIONAL { ?project dctypes:title ?title }
+    }
+
+List all subjects and their source IDs:
+
+.. code:: sparql
+
+    PREFIX prov: <http://www.w3.org/ns/prov#>
+    PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+
+    SELECT ?person ?subject_id WHERE {
+      ?person a prov:Person ;
+              ndar:src_subject_id ?subject_id .
+    }
+
+Retrieve values for a variable (e.g. ``AGE_AT_SCAN``) across all subjects:
+
+.. code:: sparql
+
+    PREFIX prov:  <http://www.w3.org/ns/prov#>
+    PREFIX ndar:  <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+    PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+
+    SELECT ?subject_id ?value WHERE {
+      ?de rdfs:label "AGE_AT_SCAN" .
+      ?acq_obj ?de ?value ;
+               prov:wasGeneratedBy ?acq .
+      ?acq prov:qualifiedAssociation ?assoc .
+      ?assoc prov:agent ?person .
+      ?person ndar:src_subject_id ?subject_id .
+    }
+
+Find all DataElements about a given concept using ``nidm:isAbout``
+(enables cross-dataset federated queries):
+
+.. code:: sparql
+
+    PREFIX nidm:  <http://purl.org/nidash/nidm#>
+    PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+
+    SELECT DISTINCT ?de ?label ?sourceVar WHERE {
+      { ?de a nidm:DataElement } UNION { ?de a nidm:PersonalDataElement }
+      ?de nidm:isAbout <http://uri.interlex.org/ilx_0100400> ;
+          rdfs:label ?label .
+      OPTIONAL { ?de nidm:sourceVariable ?sourceVar }
+    }
+
 NIDM-Experiment Tools
 =====================
 
