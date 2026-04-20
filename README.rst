@@ -409,9 +409,10 @@ API key.  To get an Interlex API key you visit `SciCrunch
 
 .. code:: bash
 
-  usage: csv2nidm [-h] -csv CSV_FILE [-json_map JSON_MAP | -redcap REDCAP]
-                  [-nidm NIDM_FILE] [-no_concepts] [-log LOGFILE] -out
-                  OUTPUT_FILE
+  usage: csv2nidm [-h] -csv CSV_FILE [-json_map JSON_MAP | -csv_map CSV_MAP | -redcap REDCAP]
+                  [-nidm NIDM_FILE] [-no_concepts] [-log LOGFILE]
+                  [-dataset_id DATASET_ID] [-derivative DERIVATIVE_METADATA]
+                  [-out OUTPUT_FILE]
 
   This program will load in a CSV file and iterate over the header variable
   names performing an elastic search of https://scicrunch.org/ for NIDM-ReproNim
@@ -427,20 +428,35 @@ API key.  To get an Interlex API key you visit `SciCrunch
   optional arguments:
     -h, --help            show this help message and exit
     -csv CSV_FILE         Full path to CSV file to convert
-    -json_map JSON_MAP    Full path to user-suppled JSON file containing
+    -json_map JSON_MAP    Full path to user-supplied JSON file containing
                           variable-term mappings.
+    -csv_map CSV_MAP      Full path to a user-supplied CSV data dictionary with
+                          columns: source_variable, label, description,
+                          valueType, measureOf, isAbout, unitCode, minValue,
+                          maxValue. Mutually exclusive with -json_map/-redcap.
     -redcap REDCAP        Full path to a user-supplied RedCap formatted data
                           dictionary for csv file.
     -nidm NIDM_FILE       Optional full path of NIDM file to add CSV->NIDM
                           converted graph to
     -no_concepts          If this flag is set then no concept associations will
-                          beasked of the user. This is useful if you already
-                          have a -json_map specified without concepts and want
-                          tosimply run this program to get a NIDM file with user
-                          interaction to associate concepts.
+                          be asked of the user. This is useful if you already
+                          have a -json_map specified without concepts and want to
+                          simply run this program to get a NIDM file without
+                          user interaction to associate concepts.
     -log LOGFILE, --log LOGFILE
-                          full path to directory to save log file. Log file name
+                          Full path to directory to save log file. Log file name
                           is csv2nidm_[arg.csv_file].log
+    -dataset_id DATASET_ID
+                          Optional dataset identifier (e.g. a DOI). When
+                          provided, unique data element IDs incorporate this
+                          value as part of their hash, ensuring CDE URIs are
+                          globally unique across datasets.
+    -derivative DERIVATIVE_METADATA
+                          If set, indicates the CSV contains derivative data.
+                          The value must be the path to a software metadata CSV
+                          with columns: title, description, version, url,
+                          cmdline, platform, ID. The CSV must also include
+                          columns ses, task, run, and source_url.
     -out OUTPUT_FILE      Full path with filename to save NIDM file
 
 convert
@@ -454,10 +470,11 @@ then / put them in the same place as the input file.
 
   Options:
     -nl, --nidm_file_list TEXT      A comma separated list of NIDM files with
-                                  full path  [required]
+                                    full path  [required]
     -t, --type [turtle|jsonld|xml-rdf|n3|trig]
-                                  If parameter set then NIDM file will be
-                                  exported as JSONLD  [required]
+                                    Output RDF serialization format  [required]
+    -out, --outdir TEXT             Optional directory to save converted file.
+                                    Defaults to the same directory as the input.
     --help                          Show this message and exit.
 
 concatenate
@@ -480,17 +497,21 @@ to merge NIDM files on subject ID see pynidm merge
 
 visualize
 ---------
-This command will produce a visualization(pdf) of the supplied NIDM files named
-the same as the input files and stored in the same directories.
+This command produces a visualization of the supplied NIDM files as a directed
+provenance graph, written to the same directory as each input file.
 
 .. code:: bash
 
   Usage: pynidm visualize [OPTIONS]
 
   Options:
-    -nl, --nidm_file_list TEXT  A comma separated list of NIDM files with full
-                              path  [required]
-    --help                      Show this message and exit.
+    -nl, --nidm_file_list TEXT    A comma-separated list of NIDM files with
+                                  full path  [required]
+    -fmt, --format [svg|png|pdf]  Output format (default: svg). SVG opens in
+                                  any web browser with unlimited scroll and
+                                  zoom. PNG produces a high-resolution raster.
+                                  PDF is vector but may clip very large graphs.
+    --help                        Show this message and exit.
 
 merge
 -----
@@ -512,7 +533,8 @@ merge operations.
 
 Query
 -----
-This function provides query support for NIDM graphs.
+This function provides query support for NIDM graphs.  Exactly one query-type
+option is required (the group is mutually exclusive).
 
 .. code:: bash
 
@@ -524,32 +546,103 @@ This function provides query support for NIDM graphs.
       -nc, --cde_file_list TEXT       A comma separated list of NIDM CDE files
                                       with full path. Can also be set in the
                                       CDE_DIR environment variable
+
+      Query Type (pick exactly one):
       -q, --query_file FILENAME       Text file containing a SPARQL query to
                                       execute
-      -p, --get_participants          Parameter, if set, query will return
-                                      participant IDs and prov:agent entity IDs
-      -i, --get_instruments           Parameter, if set, query will return list of
-                                      onli:assessment-instrument:
-      -iv, --get_instrument_vars      Parameter, if set, query will return list of
-                                      onli:assessment-instrument: variables
-      -de, --get_dataelements         Parameter, if set, will return all
-                                      DataElements in NIDM file
+      -p, --get_participants          Return participant IDs and prov:agent
+                                      entity IDs
+      -i, --get_instruments           Return list of
+                                      onli:assessment-instrument entries
+      -iv, --get_instrument_vars      Return variables for all
+                                      onli:assessment-instrument entries
+      -de, --get_dataelements         Return all DataElements in NIDM file
       -debv, --get_dataelements_brainvols
-                                      Parameter, if set, will return all brain
-                                      volume DataElements in NIDM file along with
+                                      Return all brain volume DataElements with
                                       details
-      -bv, --get_brainvols            Parameter, if set, will return all brain
-                                      volume data elements and values along with
-                                      participant IDs in NIDM file
-      -o, --output_file TEXT          Optional output file (CSV) to store results
-                                      of query
+      -bv, --get_brainvols            Return all brain volume data elements and
+                                      values with participant IDs
+      -gf, --get_fields TEXT          Return data for a comma-separated list of
+                                      field names across all NIDM files
+                                      (e.g. -gf age,fs_000003)
       -u, --uri TEXT                  A REST API URI query
+
+      -o, --output_file TEXT          Optional output file (CSV) to store
+                                      results of query
       -j / -no_j                      Return result of a uri query as JSON
+      -bg, --blaze TEXT               Base URL of a Blazegraph SPARQL endpoint
+                                      (e.g. http://localhost:9999/blazegraph/sparql)
       -v, --verbosity TEXT            Verbosity level 0-5, 0 is default
       --help                          Show this message and exit.
 
-Details on the REST API URI format and usage can be found on the REST API usage
-page.
+Details on the REST API URI format and usage can be found below.
+
+queryai — AI-Assisted Natural Language Query
+--------------------------------------------
+This tool translates natural-language questions about your NIDM data into
+SPARQL queries using an LLM (Anthropic Claude or OpenAI GPT).  It uses a
+two-phase approach:
+
+1. **Phase 1 — Concept Resolution:** The AI extracts variable concepts
+   (e.g. "age", "left hippocampus volume") from your question.  The tool
+   then resolves each concept to the exact DataElement URI in your NIDM
+   files by matching on ``nidm:isAbout`` (preferred) or
+   ``nidm:sourceVariable``.  If multiple DataElements match, you are
+   prompted to select the correct one(s).
+
+2. **Phase 2 — SPARQL Generation:** The resolved URIs, together with the
+   NIDM graph structure from the bundled ``nidm_schema.json``, are sent to
+   the LLM which generates a SPARQL query.  The query is executed locally
+   against your NIDM files via rdflib — **no subject data leaves your
+   machine**.
+
+.. code:: bash
+
+   Usage: pynidm queryai [OPTIONS]
+
+   Options:
+     -nl, --nidm_file_list TEXT  A comma separated list of NIDM files with
+                                 full path  [required]
+     -q, --question TEXT         Natural-language question to ask about the
+                                 NIDM data. If not provided, enters
+                                 interactive mode.
+     -o, --output_file PATH      Optional output file for results (TSV format)
+     -s, --show_query            Show the generated SPARQL query before
+                                 executing it
+     --help                      Show this message and exit.
+
+**Prerequisites** — an API key for either Anthropic or OpenAI:
+
+.. code:: bash
+
+   export ANTHROPIC_API_KEY=sk-ant-...   # or
+   export OPENAI_API_KEY=sk-...
+
+Or create a config file at ``~/.pynidm/config.json``::
+
+   {"provider": "anthropic", "api_key": "sk-ant-..."}
+
+**Example — count subjects:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl -q "How many subjects are there?" -s
+
+**Example — average age:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl -q "What is the average age of all subjects?" -s
+
+**Example — interactive mode:**
+
+.. code:: bash
+
+   pynidm queryai -nl data/nidm.ttl
+
+A demo script that downloads sample NIDM data and runs several example
+queries is available at
+``src/nidm/experiment/tools/examples/queryai_demo.sh``.
 
 linear_regression
 -----------------
@@ -562,24 +655,20 @@ This function provides linear regression support for NIDM graphs.
     Options:
       -nl, --nidm_file_list TEXT      A comma-separated list of NIDM files with
                                       full path  [required]
-      -r, --regularization TEXT       Parameter, if set, will return the results of
-                                      the linear regression with L1 or L2 regularization
-                                      depending on the type specified, and the weight
-                                      with the maximum likelihood solution. This will
-                                      prevent overfitting. (Ex: -r L1)
-      -model, --ml TEXT 		  An equation representing the linear
+      -model, --ml TEXT               An equation representing the linear
                                       regression. The dependent variable comes
                                       first, followed by "=" or "~", followed by
                                       the independent variables separated by "+"
                                       (Ex: -model "fs_003343 = age*sex + sex +
                                       age + group + age*group + bmi") [required]
-      -contstant, --ctr TEXT       	  Parameter, if set, will return differences in
-                                      variable relationships by group. One or
-                                      multiple parameters can be used (multiple
-                                      parameters should be separated by a comma-
-                                      separated list) (Ex: -contrast group,age)
+      -contrast, --ctr TEXT           Parameter, if set, will return differences
+                                      in variable relationships by group. One or
+                                      multiple parameters can be used (separate
+                                      with commas) (Ex: -contrast group,age)
+      -r, --regularization TEXT       If set, applies L1 or L2 regularization
+                                      and returns the maximum likelihood weight.
+                                      Prevents overfitting. (Ex: -r L1)
       -o, --output_file TEXT          Optional output file (TXT) to store results
-                                      of query
       --help                          Show this message and exit.
 
 To use the linear regression algorithm successfully, structure, syntax, and
@@ -986,6 +1075,14 @@ Example response:
          "StatCollectionType": "FSLStatsCollection"
       }
    }
+
+version
+-------
+Print the installed PyNIDM version.
+
+.. code:: bash
+
+   Usage: pynidm version
 
 Additional NIDM-related Tools
 =============================
