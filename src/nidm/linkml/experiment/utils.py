@@ -29,19 +29,38 @@ Legacy aliases (``tupleKeysToSimpleKeys``, ``get_RDFliteral_type``)
 are preserved for porting ease.
 """
 from __future__ import annotations
+import getpass
 import json as _json
+import logging
 import os
+import sys
 from typing import Any, Iterable, Mapping, Optional, Tuple, Union
 from uuid import UUID
 import pandas as pd
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
+import requests
 from .core import Core, getUUID
 from ..core import constants as _constants
 from ..core.constants import (  # noqa: F401 -- in scope for eval() in tuple_keys_to_simple_keys
     DD,
 )
 from ..core.namespaces import DCT, NFO, NIDM, NIIRI, PROV, RDF, RDFS, SCHEMA
+
+# ---------------------------------------------------------------------------
+# Interlex / SciCrunch mode constants -- mirror the legacy module-level
+# switches.  Production by default; flip INTERLEX_MODE to "test" before
+# importing if you want the test3 endpoint.
+# ---------------------------------------------------------------------------
+INTERLEX_MODE = "production"
+if INTERLEX_MODE == "test":
+    INTERLEX_PREFIX = "tmp_"
+    INTERLEX_ENDPOINT = "https://test3.scicrunch.org/api/1/"
+elif INTERLEX_MODE == "production":
+    INTERLEX_PREFIX = "ilx_"
+    INTERLEX_ENDPOINT = "https://scicrunch.org/api/1/"
+else:  # pragma: no cover -- defensive; INTERLEX_MODE is set above
+    raise RuntimeError("ERROR: Interlex mode can only be 'test' or 'production'")
 
 # ---------------------------------------------------------------------------
 # Tiny utilities
@@ -896,6 +915,340 @@ def write_json_mapping_file(
         _json.dump(payload, fp, indent=4)
 
 
+# ---------------------------------------------------------------------------
+# Chunk 15.7 -- SciCrunch / InterLex / OWL / GitHub helpers.
+#
+# These are network-coupled leaf helpers that the interactive
+# variable-mapping path (chunks 15.5b/c) calls into.  Each one mirrors
+# the legacy ``nidm.experiment.Utils`` signature so the rest of the
+# port can swap imports without touching call sites.
+# ---------------------------------------------------------------------------
+
+# Curated list of "tagged ancestor" InterLex IDs that the legacy code
+# uses to restrict elastic-search hits to the ReproNim term trove.
+_SCICRUNCH_ANCESTORS = [
+    "ilx_0115066",
+    "ilx_0103210",
+    "ilx_0115072",
+    "ilx_0115070",
+]
+
+
+def _scicrunch_query_body(
+    query_string: str, type_: str, ancestors: bool
+) -> dict:
+    """Build the ElasticSearch ``data`` payload for a SciCrunch query.
+
+    Internal helper for :func:`QuerySciCrunchElasticSearch` -- factored
+    out so the four ``type`` branches don't each duplicate the same
+    nested ``{"bool": {"must": [...]}}`` structure.
+    """
+    must: list = [
+        {"term": {"type": type_}},
+        {
+            "multi_match": {
+                "query": query_string,
+                "fields": ["label", "definition"],
+            }
+        },
+    ]
+    if ancestors:
+        # Insert the ancestor restriction between the type filter and
+        # the multi_match (matches legacy ordering).
+        must.insert(1, {"terms": {"ancestors.ilx": _SCICRUNCH_ANCESTORS}})
+    return {"query": {"bool": {"must": must}}}
+
+
+def QuerySciCrunchElasticSearch(
+    query_string: str,
+    type: str = "cde",  # noqa: A002 -- legacy parameter name
+    anscestors: bool = True,
+) -> dict:
+    """Issue an ElasticSearch query against SciCrunch / InterLex.
+
+    Mirrors the legacy ``QuerySciCrunchElasticSearch`` signature
+    (including the misspelled ``anscestors`` kwarg).  Requires the
+    ``INTERLEX_API_KEY`` environment variable.
+
+    Parameters
+    ----------
+    query_string
+        Free-text term query to match against ``label`` and ``definition``.
+    type
+        One of ``"cde"``, ``"pde"``, ``"fde"``, or ``"term"``.
+    anscestors
+        When ``True``, restrict results to the ReproNim ancestor trove.
+
+    Returns
+    -------
+    dict
+        Parsed JSON response from the SciCrunch elastic endpoint.
+    """
+    if type not in ("cde", "pde", "fde", "term"):
+        print(
+            f"ERROR: Valid types for SciCrunch query are 'cde','pde', or 'fde'.  You set type: {type} "
+        )
+        print("ERROR: in function Utils.py/QuerySciCrunchElasticSearch")
+        sys.exit(1)
+
+    try:
+        api_key = os.environ["INTERLEX_API_KEY"]
+    except KeyError:
+        print("Please set the environment variable INTERLEX_API_KEY")
+        sys.exit(1)
+
+    params = (("key", api_key),)
+    data = _scicrunch_query_body(query_string, type, anscestors)
+    response = requests.post(
+        "https://scicrunch.org/api/1/elastic-ilx/interlex/term/_search#",
+        params=params,
+        json=data,
+    )
+    return _json.loads(response.text)
+
+
+def GetNIDMTermsFromSciCrunch(
+    query_string: str,
+    type: str = "cde",  # noqa: A002 -- legacy parameter name
+    ancestor: bool = True,
+) -> dict:
+    """Query SciCrunch and return a label/definition/preferred-URL dict.
+
+    Thin wrapper around :func:`QuerySciCrunchElasticSearch` that pulls
+    just the fields the variable-mapping UI needs.  Returns ``{}`` if
+    the underlying query timed out.
+
+    Returns
+    -------
+    dict
+        Keyed by InterLex ID (``"ilx_..."``); each value is a dict with
+        ``"preferred_url"``, ``"label"``, ``"definition"``.
+    """
+    json_data = QuerySciCrunchElasticSearch(query_string, type, ancestor)
+    results: dict = {}
+    if json_data.get("timed_out") is True:
+        return results
+
+    for term in json_data["hits"]["hits"]:
+        source = term["_source"]
+        ilx = source["ilx"]
+        results[ilx] = {}
+        for items in source["existing_ids"]:
+            if items["preferred"] == "1":
+                results[ilx]["preferred_url"] = items["iri"]
+            results[ilx]["label"] = source["label"]
+            results[ilx]["definition"] = source["definition"]
+    return results
+
+
+def InitializeInterlexRemote():
+    """Initialize the ``ontquery`` InterLex client.
+
+    Requires the ``INTERLEX_API_KEY`` environment variable (consumed by
+    the ontquery plugin, not read explicitly here).  Returns the
+    initialized client; on a setup error a warning is printed and the
+    half-initialized client is returned anyway so the caller can decide
+    whether to proceed (matches legacy behavior).
+    """
+    import ontquery as oq
+
+    InterLexRemote = oq.plugin.get("InterLex")
+    ilx_cli = InterLexRemote(apiEndpoint=INTERLEX_ENDPOINT)
+    try:
+        ilx_cli.setup(instrumented=oq.OntTerm)
+    except Exception:
+        print("error initializing InterLex connection...")
+        print("you will not be able to add new personal data elements.")
+        print(
+            "Did you put your scicrunch API key in an environment variable INTERLEX_API_KEY?"
+        )
+    return ilx_cli
+
+
+def AddPDEToInterlex(
+    ilx_obj,
+    label: str,
+    definition: str,
+    units: str,
+    min,  # noqa: A002 -- legacy parameter name
+    max,  # noqa: A002 -- legacy parameter name
+    datatype: str,
+    isabout: Optional[str] = None,
+    categorymappings: Optional[str] = None,
+):
+    """Register a personal data element (PDE) in InterLex.
+
+    Builds the same predicate-URI dictionary the legacy version did
+    (datatype / units / min / max / category / isabout), then calls
+    ``ilx_obj.add_pde`` with whichever subset of predicates is
+    non-empty.  Returns the InterLex response object verbatim.
+    """
+    prefix = INTERLEX_PREFIX
+    uri_datatype = "http://uri.interlex.org/base/" + prefix + "_0382131"
+    uri_units = "http://uri.interlex.org/base/" + prefix + "_0382130"
+    uri_min = "http://uri.interlex.org/base/" + prefix + "_0382133"
+    uri_max = "http://uri.interlex.org/base/" + prefix + "_0382132"
+    uri_category = "http://uri.interlex.org/base/" + prefix + "_0382129"
+    uri_isabout = "http://uri.interlex.org/base/" + prefix + "_0381385"
+
+    predicates: dict = {
+        uri_datatype: datatype,
+        uri_units: units,
+        uri_min: min,
+        uri_max: max,
+    }
+    if isabout is not None:
+        predicates[uri_isabout] = isabout
+    if categorymappings is not None:
+        predicates[uri_category] = categorymappings
+
+    return ilx_obj.add_pde(label=label, definition=definition, predicates=predicates)
+
+
+def AddConceptToInterlex(ilx_obj, label: str, definition: str):
+    """Register a Concept in InterLex.
+
+    Matches the legacy quirk that the registration is done via
+    ``add_pde`` even though it represents a concept.
+    """
+    return ilx_obj.add_pde(label=label, definition=definition)
+
+
+# Curated list of NIDM-experiment OWL imports and the two top-level OWL
+# files; legacy lists ``pato_import.ttl`` twice and we preserve that
+# (the union graph dedupes triples anyway).
+_NIDM_OWL_URLS = [
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/crypto_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/dc_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/dicom_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/iao_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/nfo_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/obi_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/ontoneurolog_instruments_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/pato_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/pato_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/prv_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/imports/sio_import.ttl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-experiment/terms/nidm-experiment.owl",
+    "https://raw.githubusercontent.com/incf-nidash/nidm-specs/master/nidm/nidm-results/terms/nidm-results.owl",
+]
+
+
+def load_nidm_terms_concepts():
+    """Fetch the NIDM-Terms used-concepts JSON-LD file.
+
+    Returns the parsed JSON or ``None`` on any failure (network
+    outage, 404, bad JSON).  Matches the legacy quiet-failure shape.
+    """
+    concept_url = (
+        "https://raw.githubusercontent.com/NIDM-Terms/terms/master/"
+        "terms/NIDM_Concepts.jsonld"
+    )
+    try:
+        r = requests.get(concept_url)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        logging.info("Error opening %s used concepts file..continuing", concept_url)
+        return None
+
+
+def load_nidm_owl_files() -> Graph:
+    """Build a union graph of all NIDM-experiment OWL imports.
+
+    Iterates :data:`_NIDM_OWL_URLS`, parses each as turtle, and
+    accumulates triples in a single :class:`rdflib.Graph`.  Failures
+    on individual imports are logged at INFO and skipped so a partial
+    network failure still returns a usable (if incomplete) graph.
+    """
+    union_graph = Graph()
+    for resource in _NIDM_OWL_URLS:
+        temp_graph = Graph()
+        try:
+            temp_graph.parse(location=resource, format="turtle")
+            union_graph = union_graph + temp_graph
+        except Exception:
+            logging.info("Error opening %s owl file..continuing", resource)
+            continue
+    return union_graph
+
+
+def authenticate_github(authed=None, credentials: Optional[list] = None):
+    """Authenticate to GitHub via PyGithub.
+
+    Mirrors the legacy contract:
+
+    * If *credentials* has 2 entries, treat as ``(username, token)``.
+    * If *credentials* has 1 entry, prompt for the password.
+    * Otherwise prompt for both username and password.
+
+    Retries up to 5 times.  On success returns ``(authed_user, github)``;
+    on persistent failure returns ``None`` (and logs critical).
+    """
+    from github import Github, GithubException
+
+    print("GitHub authentication...")
+    if credentials is None:
+        credentials = []
+
+    index = 1
+    maxtry = 5
+    g = None
+    while index < maxtry:
+        if len(credentials) >= 2:
+            g = Github(credentials[0], credentials[1])
+        elif len(credentials) == 1:
+            pw = getpass.getpass("Please enter your GitHub password: ")
+            g = Github(credentials[0], pw)
+        else:
+            username = input("Please enter your GitHub user name: ")
+            pw = getpass.getpass("Please enter your GitHub password: ")
+            g = Github(username, pw)
+
+        authed = g.get_user()
+        try:
+            # Touch a public attribute to verify we're really logged in.
+            authed.public_repos
+            logging.info("Github authentication successful")
+            break
+        except GithubException:
+            logging.info("error logging into your github account, please try again...")
+            index = index + 1
+
+    if index == maxtry:
+        logging.critical(
+            "GitHub authentication failed.  Check your username / password / token and try again"
+        )
+        return None
+    return authed, g
+
+
+def getSubjIDColumn(column_to_terms: Mapping[str, Any], df) -> str:
+    """Return the column name that holds the subject ID.
+
+    First tries to find a column whose annotated label matches
+    ``NIDM_SUBJECTID``.  If no match is found, falls back to an
+    interactive prompt listing the columns.
+    """
+    id_field = None
+    for key, value in column_to_terms.items():
+        # _constants.NIDM_SUBJECTID is a URIRef; its local name is the
+        # label the legacy code compares against (``"subject_id"``).
+        target = str(_constants.NIDM_SUBJECTID).rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+        if value.get("label") == target:
+            id_field = key
+            break
+
+    if id_field is None:
+        option = 1
+        for column in df.columns:
+            print(f"{option}: {column}")
+            option = option + 1
+        selection = input("Please select the subject ID field from the list above: ")
+        id_field = df.columns[int(selection) - 1]
+    return id_field
+
+
 __all__ = [
     "safe_string",
     "validate_uuid",
@@ -920,4 +1273,17 @@ __all__ = [
     "detect_json_format",
     "redcap_datadictionary_to_json",
     "write_json_mapping_file",
+    # Chunk 15.7 -- network leaf helpers
+    "INTERLEX_MODE",
+    "INTERLEX_PREFIX",
+    "INTERLEX_ENDPOINT",
+    "QuerySciCrunchElasticSearch",
+    "GetNIDMTermsFromSciCrunch",
+    "InitializeInterlexRemote",
+    "AddPDEToInterlex",
+    "AddConceptToInterlex",
+    "load_nidm_terms_concepts",
+    "load_nidm_owl_files",
+    "authenticate_github",
+    "getSubjIDColumn",
 ]
