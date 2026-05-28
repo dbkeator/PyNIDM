@@ -29,6 +29,7 @@ Legacy aliases (``tupleKeysToSimpleKeys``, ``get_RDFliteral_type``)
 are preserved for porting ease.
 """
 from __future__ import annotations
+from binascii import crc32
 import getpass
 import json as _json
 import logging
@@ -36,16 +37,29 @@ import os
 import sys
 from typing import Any, Iterable, Mapping, Optional, Tuple, Union
 from uuid import UUID
+from numpy import base_repr
 import pandas as pd
-from rdflib import Graph, Literal, Namespace, URIRef
-from rdflib.namespace import XSD
+from rdflib import BNode, Graph, Literal, Namespace, URIRef
+from rdflib.namespace import XSD, split_uri
 import requests
 from .core import Core, getUUID
 from ..core import constants as _constants
 from ..core.constants import (  # noqa: F401 -- in scope for eval() in tuple_keys_to_simple_keys
     DD,
 )
-from ..core.namespaces import DCT, NFO, NIDM, NIIRI, PROV, RDF, RDFS, SCHEMA
+from ..core.namespaces import (
+    BIDS,
+    DCT,
+    INTERLEX,
+    NFO,
+    NIDM,
+    NIIRI,
+    PROV,
+    RDF,
+    RDFS,
+    REPROSCHEMA,
+    SCHEMA,
+)
 
 # ---------------------------------------------------------------------------
 # Interlex / SciCrunch mode constants -- mirror the legacy module-level
@@ -1249,6 +1263,206 @@ def getSubjIDColumn(column_to_terms: Mapping[str, Any], df) -> str:
     return id_field
 
 
+# ---------------------------------------------------------------------------
+# Chunk 15.6 -- DD_UUID + DD_to_nidm.
+#
+# The data-dictionary side of the legacy Utils.  ``DD_UUID`` builds a
+# stable per-element URI keyed off the data-dictionary entry's content
+# (so the same dict entry hashes to the same URI across runs).
+# ``DD_to_nidm`` walks a data-dictionary structure and produces a CDE
+# graph -- one ``PersonalDataElement`` per non-``subject_id`` variable
+# with all the usual NIDM/ReproSchema annotations attached.  No
+# wrapper objects are used here; the legacy version emitted raw
+# triples and we preserve that for byte-identical parity.
+# ---------------------------------------------------------------------------
+
+
+def DD_UUID(element: str, dd_struct: Mapping[str, Any], cde_namespace=None) -> URIRef:
+    """Build a deterministic per-element URI for *element*.
+
+    *element* is a stringified ``DD(source=..., variable=...)`` key as
+    produced by :func:`csv_dd_to_json_dd` / :func:`redcap_datadictionary_to_json`.
+    The URI is ``<base>/<safe_variable>_<crc32_b32>`` where the base
+    is the user-supplied ``cde_namespace`` (first value) when given,
+    otherwise the ``niiri:`` namespace.  Same ``dd_struct[element]``
+    always produces the same URI regardless of ``dataset_identifier``
+    (matches legacy guarantee).
+    """
+    key_tuple = eval(element)  # noqa: S307 -- DD()-literal trusted, legacy parity
+    entry = dd_struct[str(key_tuple)]
+    variable_name = entry.get("source_variable", "unknown_var")
+
+    # Canonical JSON so dict-key ordering doesn't perturb the hash.
+    canonical_str = _json.dumps(
+        entry, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    crc_val = crc32(canonical_str.encode("utf-8")) & 0xFFFFFFFF
+    crc32hash = base_repr(crc_val, 32).lower()
+
+    if cde_namespace is not None:
+        # Legacy: take the first provided namespace URL verbatim.
+        cde_ns = list(cde_namespace.values())[0]
+        return URIRef(cde_ns + safe_string(variable_name) + "_" + crc32hash)
+    return URIRef(str(NIIRI) + safe_string(variable_name) + "_" + crc32hash)
+
+
+def _bind_dd_namespaces(g: Graph, cde_namespace: Optional[Mapping] = None) -> None:
+    """Bind the prov/dct/bids/nidm/niiri/ilx/reproschema prefixes on *g*.
+
+    Optionally bind one user-supplied prefix from ``cde_namespace``.
+    Factored out of ``DD_to_nidm`` so the binding contract is
+    one place to maintain.
+    """
+    g.bind(prefix="prov", namespace=PROV)
+    g.bind(prefix="dct", namespace=DCT)
+    g.bind(prefix="bids", namespace=BIDS)
+    g.bind(prefix="nidm", namespace=NIDM)
+    g.bind(prefix="niiri", namespace=NIIRI)
+    g.bind(prefix="ilx", namespace=INTERLEX)
+    g.bind(prefix="reproschema", namespace=REPROSCHEMA)
+    if cde_namespace is not None:
+        prefix = next(iter(cde_namespace.keys()))
+        url = next(iter(cde_namespace.values()))
+        g.bind(prefix=prefix, namespace=Namespace(url))
+
+
+def _emit_choice_levels(g: Graph, cde_id: URIRef, choices) -> None:
+    """Emit reproschema:choices triples for the levels field.
+
+    Matches the three legacy shapes:
+      * dict ``{label: code}`` -> one BNode per pair, label+value.
+      * list -> one Literal per choice.
+      * scalar -> single Literal.
+    """
+    if isinstance(choices, dict):
+        for level_label, level_code in choices.items():
+            choice = BNode()
+            g.add((cde_id, REPROSCHEMA.choices, choice))
+            g.add((choice, REPROSCHEMA.value, Literal(level_code)))
+            g.add((choice, RDFS.label, Literal(level_label)))
+    elif isinstance(choices, list):
+        for val in choices:
+            g.add((cde_id, REPROSCHEMA.choices, Literal(val)))
+    else:
+        g.add((cde_id, REPROSCHEMA.choices, Literal(choices)))
+
+
+def _emit_response_options(g: Graph, cde_id: URIRef, response_options: dict) -> None:
+    """Emit triples for a ReproSchema-style ``responseOptions`` dict."""
+    for response_key, response_value in response_options.items():
+        if response_key == "valueType":
+            g.add((cde_id, NIDM["valueType"], URIRef(response_value)))
+        elif response_key in ("minValue", "minimumValue"):
+            g.add((cde_id, NIDM["minValue"], Literal(response_value)))
+        elif response_key in ("maxValue", "maximumValue"):
+            g.add((cde_id, NIDM["maxValue"], Literal(response_value)))
+        elif response_key == "choices":
+            _emit_choice_levels(g, cde_id, response_value)
+
+
+def _emit_isabout_entry(
+    g: Graph, cde_id: URIRef, isabout_entry: Mapping[str, Any]
+) -> None:
+    """Emit triples for a single ``isAbout`` sub-dict.
+
+    Each entry contributes one ``nidm:isAbout`` URIRef edge and an
+    optional ``rdfs:label`` on the referent.  The legacy code binds
+    a ``term_<localname>`` prefix per URL; we preserve that.
+    """
+    last_id: Optional[URIRef] = None
+    for isabout_key, isabout_value in isabout_entry.items():
+        if isabout_key in ("@id", "url"):
+            _, isabout_term = split_uri(isabout_value)
+            term_ns = Namespace(isabout_value)
+            g.bind(prefix="term_" + isabout_term, namespace=term_ns)
+            last_id = URIRef(str(term_ns))
+            g.add((cde_id, NIDM["isAbout"], last_id))
+        elif isabout_key == "label" and last_id is not None:
+            g.add((last_id, RDF.type, PROV["Entity"]))
+            g.add((last_id, RDFS["label"], Literal(isabout_value)))
+
+
+def DD_to_nidm(
+    dd_struct: Mapping[str, Any], cde_namespace: Optional[Mapping] = None
+) -> Graph:
+    """Convert a data-dictionary structure into a NIDM CDE graph.
+
+    *dd_struct* is a dict keyed by stringified ``DD()`` tuples (the
+    output shape of :func:`map_variables_to_terms` and
+    :func:`redcap_datadictionary_to_json`).  Returns an rdflib
+    :class:`~rdflib.Graph` carrying one ``nidm:PersonalDataElement`` per
+    non-``subject_id`` variable, with label/description/levels/isAbout
+    attached.  The graph also carries the ``PersonalDataElement →
+    DataElement`` ``rdfs:subClassOf`` triple so SPARQL queries against
+    ``DataElement`` reach the personal variant.
+
+    The output graph is what gets union-merged into the main NIDM file
+    by ``csv2nidm`` / ``bidsmri2nidm`` / friends.
+    """
+    g = Graph()
+    _bind_dd_namespaces(g, cde_namespace)
+
+    for key in dd_struct:
+        key_tuple = eval(key)  # noqa: S307 -- DD()-literal trusted, legacy parity
+        if key_tuple.variable == "subject_id":
+            continue
+
+        # Resolve the per-element URI exactly once.
+        cde_id = DD_UUID(element=key, dd_struct=dd_struct, cde_namespace=cde_namespace)
+        g.add((cde_id, RDF.type, NIDM["PersonalDataElement"]))
+        g.add((cde_id, RDF.type, PROV["Entity"]))
+        # PersonalDataElement is a subclass of DataElement so generic
+        # queries against DataElement reach personal variants too.
+        g.add(
+            (
+                NIDM["PersonalDataElement"],
+                RDFS["subClassOf"],
+                NIDM["DataElement"],
+            )
+        )
+
+        # Each top-level property on the DD entry maps to a fixed
+        # NIDM / ReproSchema predicate.  Anything not recognized is
+        # silently dropped (matches legacy behavior).
+        for prop_key, prop_value in dd_struct[str(key_tuple)].items():
+            if prop_key == "definition":
+                g.add((cde_id, RDFS["comment"], Literal(prop_value)))
+            elif prop_key == "description":
+                g.add((cde_id, DCT["description"], Literal(prop_value)))
+            elif prop_key == "url":
+                g.add((cde_id, NIDM["url"], URIRef(prop_value)))
+            elif prop_key == "label":
+                g.add((cde_id, RDFS["label"], Literal(prop_value)))
+            elif prop_key in ("levels", "Levels", "responseOptions"):
+                if isinstance(prop_value, dict):
+                    _emit_response_options(g, cde_id, prop_value)
+            elif prop_key == "source_variable":
+                g.add((cde_id, NIDM["sourceVariable"], Literal(prop_value)))
+            elif prop_key == "isAbout":
+                # isAbout can be a single dict or a list of dicts.
+                if isinstance(prop_value, list):
+                    for sub in prop_value:
+                        _emit_isabout_entry(g, cde_id, sub)
+                else:
+                    _emit_isabout_entry(g, cde_id, prop_value)
+            elif prop_key == "valueType":
+                g.add((cde_id, NIDM["valueType"], URIRef(prop_value)))
+            elif prop_key in ("minValue", "minimumValue"):
+                g.add((cde_id, NIDM["minValue"], Literal(prop_value)))
+            elif prop_key in ("maxValue", "maximumValue"):
+                g.add((cde_id, NIDM["maxValue"], Literal(prop_value)))
+            elif prop_key == "hasUnit":
+                g.add((cde_id, NIDM["unitCode"], Literal(prop_value)))
+            elif prop_key == "sameAs":
+                g.add((cde_id, NIDM["sameAs"], URIRef(prop_value)))
+            elif prop_key == "associatedWith":
+                g.add((cde_id, INTERLEX["ilx_0739289"], Literal(prop_value)))
+            elif prop_key == "allowableValues":
+                g.add((cde_id, BIDS["allowableValues"], Literal(prop_value)))
+
+    return g
+
+
 __all__ = [
     "safe_string",
     "validate_uuid",
@@ -1286,4 +1500,7 @@ __all__ = [
     "load_nidm_owl_files",
     "authenticate_github",
     "getSubjIDColumn",
+    # Chunk 15.6 -- data-dictionary -> NIDM CDE graph
+    "DD_UUID",
+    "DD_to_nidm",
 ]
