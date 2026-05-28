@@ -90,6 +90,8 @@ classes:
 
   Project:
     class_uri: nidm:Project
+    annotations:
+      additional_rdf_types: prov:Activity
     description: >-
       Top-level container for a research project or study.  Every NIDM graph
       has at least one Project.  A Project is also a prov:Activity.
@@ -151,6 +153,8 @@ classes:
 
   Session:
     class_uri: nidm:Session
+    annotations:
+      additional_rdf_types: prov:Activity
     description: >-
       A study session, typically one per participant visit.  Contains
       acquisition activities.  A Session is also a prov:Activity.
@@ -177,6 +181,8 @@ classes:
 
   Acquisition:
     class_uri: nidm:Acquisition
+    annotations:
+      additional_rdf_types: prov:Activity
     description: >-
       An acquisition activity such as an MRI scan or questionnaire
       administration.  Produces AcquisitionObjects.  Also a prov:Activity.
@@ -208,6 +214,8 @@ classes:
 
   AcquisitionObject:
     class_uri: nidm:AcquisitionObject
+    annotations:
+      additional_rdf_types: prov:Entity
     description: >-
       A data entity produced by an Acquisition.  Can represent imaging data,
       assessment/questionnaire results, or demographic data.  Also a
@@ -261,6 +269,8 @@ classes:
 
   DataElement:
     class_uri: nidm:DataElement
+    annotations:
+      additional_rdf_types: prov:Entity
     description: >-
       Metadata describing a measured variable.  Defines the semantics, data
       type, units, and ontology mapping for a column/variable in the study
@@ -336,6 +346,8 @@ classes:
   PersonalDataElement:
     class_uri: nidm:PersonalDataElement
     is_a: DataElement
+    annotations:
+      additional_rdf_types: prov:Entity
     description: >-
       A DataElement for personal or demographic data (age, sex, handedness,
       diagnosis, etc.).  Subclass of nidm:DataElement.
@@ -347,6 +359,8 @@ classes:
 
   Derivative:
     class_uri: nidm:Derivative
+    annotations:
+      additional_rdf_types: prov:Activity
     description: >-
       A processing or analysis activity that produces derived data (e.g. brain
       volume measurements from FreeSurfer, FSL, ANTs).  Also a prov:Activity.
@@ -367,6 +381,8 @@ classes:
 
   DerivativeObject:
     class_uri: nidm:DerivativeObject
+    annotations:
+      additional_rdf_types: prov:Entity
     description: >-
       An entity produced by a Derivative processing activity.  Contains
       derived measurements.  Also a prov:Entity.
@@ -388,6 +404,8 @@ classes:
 
   Person:
     class_uri: prov:Person
+    annotations:
+      additional_rdf_types: prov:Agent
     description: >-
       A research participant or subject.  Also a prov:Agent.
     comments:
@@ -408,6 +426,8 @@ classes:
 
   SoftwareAgent:
     class_uri: prov:SoftwareAgent
+    annotations:
+      additional_rdf_types: prov:Agent
     description: >-
       Software that produced or processed data (e.g. bidsmri2nidm.py,
       csv2nidm.py, FreeSurfer).  Also a prov:Agent.
@@ -460,6 +480,8 @@ classes:
 
   Collection:
     class_uri: prov:Collection
+    annotations:
+      additional_rdf_types: prov:Entity
     description: >-
       A collection of entities (e.g. a BIDS dataset, a FreeSurfer stats
       collection).  Also a prov:Entity.
