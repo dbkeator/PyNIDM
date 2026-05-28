@@ -110,9 +110,7 @@ def test_get_nidm_terms_from_scicrunch_unpacks_hits():
             ]
         },
     }
-    with patch.object(
-        utils, "QuerySciCrunchElasticSearch", return_value=fake_payload
-    ):
+    with patch.object(utils, "QuerySciCrunchElasticSearch", return_value=fake_payload):
         results = utils.GetNIDMTermsFromSciCrunch("age", "cde", True)
 
     assert "ilx_0000001" in results
@@ -178,9 +176,7 @@ def test_add_pde_to_interlex_minimal_predicates():
     # 4 base predicates only; no isabout, no category
     assert len(preds) == 4
     # Datatype URI carries the supplied datatype string
-    datatype_uri = (
-        "http://uri.interlex.org/base/" + utils.INTERLEX_PREFIX + "_0382131"
-    )
+    datatype_uri = "http://uri.interlex.org/base/" + utils.INTERLEX_PREFIX + "_0382131"
     assert preds[datatype_uri] == "int"
 
 
@@ -200,9 +196,7 @@ def test_add_pde_to_interlex_with_isabout_and_categories():
     preds = ilx_obj.add_pde.call_args.kwargs["predicates"]
     # 4 base + isabout + category = 6 predicates
     assert len(preds) == 6
-    isabout_uri = (
-        "http://uri.interlex.org/base/" + utils.INTERLEX_PREFIX + "_0381385"
-    )
+    isabout_uri = "http://uri.interlex.org/base/" + utils.INTERLEX_PREFIX + "_0381385"
     cat_uri = "http://uri.interlex.org/base/" + utils.INTERLEX_PREFIX + "_0382129"
     assert preds[isabout_uri] == "http://example.org/sex"
     assert preds[cat_uri] == "0=Female|1=Male"
@@ -215,7 +209,9 @@ def test_add_pde_to_interlex_with_isabout_and_categories():
 
 def test_add_concept_to_interlex_calls_add_pde():
     ilx_obj = MagicMock()
-    utils.AddConceptToInterlex(ilx_obj, label="memory", definition="the act of remembering")
+    utils.AddConceptToInterlex(
+        ilx_obj, label="memory", definition="the act of remembering"
+    )
     ilx_obj.add_pde.assert_called_once_with(
         label="memory", definition="the act of remembering"
     )
@@ -253,8 +249,11 @@ def test_load_nidm_owl_files_returns_union_graph():
     seen_resources: list = []
 
     class _StubGraph(Graph):
-        def parse(  # noqa: A002 U100 -- matches rdflib.Graph.parse signature
-            self, location=None, format=None, **kw
+        def parse(
+            self,
+            location=None,  # noqa: U100 -- matches rdflib.Graph.parse signature
+            format=None,  # noqa: A002 U100
+            **kw,  # noqa: U100
         ):
             seen_resources.append(location)
             return self
@@ -274,8 +273,11 @@ def test_load_nidm_owl_files_continues_on_individual_failures():
     call_count = {"n": 0}
 
     class _FlakyGraph(Graph):
-        def parse(  # noqa: A002 U100 -- matches rdflib.Graph.parse signature
-            self, location=None, format=None, **kw
+        def parse(
+            self,
+            location=None,  # noqa: U100 -- matches rdflib.Graph.parse signature
+            format=None,  # noqa: A002 U100
+            **kw,  # noqa: U100
         ):
             call_count["n"] += 1
             if call_count["n"] == 3:

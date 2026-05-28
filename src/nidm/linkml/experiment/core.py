@@ -237,7 +237,11 @@ class Core:
     #: Legacy camelCase alias for :meth:`serialize_jsonld`.
     serializeJSONLD = serialize_jsonld
 
-    def write(self, destination: PathLike, format: str = "turtle") -> None:  # noqa: A002
+    def write(
+        self,
+        destination: PathLike,
+        format: str = "turtle",  # noqa: A002 -- mirror rdflib.Graph.serialize
+    ) -> None:
         """Serialize the graph to *destination* on disk."""
         self.graph.serialize(destination=str(destination), format=format)
 

@@ -69,10 +69,7 @@ from ..project import Project
 from ..session import Session
 from ..software_agent import SoftwareAgent
 from ...core.namespaces import BIDS, SIO
-from ...generated.nidm_schema_pydantic import (
-    ImageContrastTypeEnum,
-    ImageUsageTypeEnum,
-)
+from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
 __version__ = "0.1.0"  # slim port version, distinct from legacy
 

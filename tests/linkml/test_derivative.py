@@ -17,7 +17,7 @@ Verifies:
 """
 from __future__ import annotations
 from pathlib import Path
-from rdflib import Graph, Literal, URIRef
+from rdflib import Graph, URIRef
 from rdflib.compare import isomorphic
 from rdflib.namespace import RDF
 from nidm.linkml.core.namespaces import DCT, NIDM, NIIRI, PROV

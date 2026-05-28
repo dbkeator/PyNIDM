@@ -549,8 +549,10 @@ def add_export_provenance(
 
 
 def read_nidm(
-    nidm_doc, *, format: Optional[str] = None
-):  # noqa: A002 -- mirrors rdflib's parse(format=...) API
+    nidm_doc,
+    *,
+    format: Optional[str] = None,  # noqa: A002 -- mirrors rdflib's parse(format=...)
+):
     """
     Load a NIDM-Experiment turtle (or other RDF) file into a Project
     wrapper.
@@ -934,9 +936,7 @@ _SCICRUNCH_ANCESTORS = [
 ]
 
 
-def _scicrunch_query_body(
-    query_string: str, type_: str, ancestors: bool
-) -> dict:
+def _scicrunch_query_body(query_string: str, type_: str, ancestors: bool) -> dict:
     """Build the ElasticSearch ``data`` payload for a SciCrunch query.
 
     Internal helper for :func:`QuerySciCrunchElasticSearch` -- factored
