@@ -1463,6 +1463,499 @@ def DD_to_nidm(
     return g
 
 
+# ---------------------------------------------------------------------------
+# Chunk 15.5c -- interactive concept helpers.
+#
+# Three input()-driven helpers used by ``map_variables_to_terms``:
+#
+#   * ``find_concept_interactive`` -- iteratively search NIDM-Terms /
+#     InterLex / Cognitive Atlas / NIDM OWL for a concept to link a
+#     source variable to.  Loops until the user picks one or bails.
+#   * ``define_new_concept`` -- prompt for label + definition and
+#     register the result in InterLex.
+#   * ``annotate_data_element`` -- collect label / description /
+#     value-type / categories / min-max / units for a variable.
+#
+# Tests cover the non-interactive branches by mocking ``input()``.
+# ---------------------------------------------------------------------------
+
+# Minimum fuzzy-match score for surfacing a candidate; cogatlas
+# results get +20 to filter noise.  Matches legacy thresholds.
+_CONCEPT_MIN_MATCH_SCORE = 50
+_COGATLAS_SCORE_BUMP = 20
+
+
+def _print_search_candidate(option: int, value: Mapping[str, Any]) -> None:
+    """Print one numbered candidate line.  Matches legacy layout."""
+    print(
+        f"{option}: Label:",
+        value["label"],
+        "\t Definition:",
+        value["definition"],
+        "\t URL:",
+        value["url"],
+    )
+
+
+def _add_candidate_to_search_result(
+    search_result: dict, key: str, value: Mapping[str, Any], option: int
+) -> None:
+    """Store a candidate in *search_result* indexed by both its
+    natural key and the numbered selection."""
+    search_result[key] = {
+        "label": value["label"],
+        "definition": value["definition"],
+        "preferred_url": value["url"],
+    }
+    search_result[str(option)] = key
+
+
+def _collect_nidmterms_candidates(
+    nidmterms_concepts, search_term: str, search_result: dict, option: int
+) -> int:
+    """Append NIDM-Terms candidates to *search_result* and return the
+    next option counter."""
+    if nidmterms_concepts is None:
+        return option
+    matches = fuzzy_match_concepts_from_nidmterms_jsonld(
+        nidmterms_concepts, search_term
+    )
+    first = True
+    for key, value in matches.items():
+        if value["score"] > _CONCEPT_MIN_MATCH_SCORE:
+            if first:
+                print()
+                print("NIDM-Terms Concepts:")
+                first = False
+            _print_search_candidate(option, value)
+            _add_candidate_to_search_result(search_result, key, value, option)
+            option += 1
+    return option
+
+
+def _collect_interlex_candidates(
+    ilx_obj, search_term: str, search_result: dict, option: int
+) -> int:
+    """Append InterLex (broad SciCrunch) candidates."""
+    if ilx_obj is None:
+        return option
+    ilx_result = GetNIDMTermsFromSciCrunch(search_term, type="term", ancestor=False)
+    if not ilx_result:
+        return option
+    print("InterLex:")
+    print()
+    for key, value in ilx_result.items():
+        print(
+            f"{option}: Label:",
+            value["label"],
+            "\t Definition:",
+            value["definition"],
+            "\t Preferred URL:",
+            value["preferred_url"],
+        )
+        search_result[key] = {
+            "label": value["label"],
+            "definition": value["definition"],
+            "preferred_url": value["preferred_url"],
+        }
+        search_result[str(option)] = key
+        option += 1
+    return option
+
+
+def _collect_cogatlas_candidates(
+    cogatlas_json, search_term: str, search_result: dict, option: int, header: str
+) -> int:
+    """Append Cognitive Atlas concepts or disorders to *search_result*.
+
+    *cogatlas_json* is the ``.json`` attribute of a cognitiveatlas
+    ``get_concept(silent=True)`` or ``get_disorder(silent=True)``
+    result.  *header* is the section header printed before the first
+    match, e.g. ``"Cognitive Atlas:"`` for concepts.  Silently
+    no-ops on any error (network / shape).
+    """
+    try:
+        matches = fuzzy_match_terms_from_cogatlas_json(cogatlas_json, search_term)
+    except Exception:
+        return option
+    first = True
+    threshold = _CONCEPT_MIN_MATCH_SCORE + _COGATLAS_SCORE_BUMP
+    for key, value in matches.items():
+        if value["score"] > threshold:
+            if first and header:
+                print()
+                print(header)
+                print()
+                first = False
+            print(
+                f"{option}: Label:",
+                value["label"],
+                "\t Definition:  ",
+                value["definition"].rstrip("\r\n"),
+            )
+            search_result[key] = {
+                "label": value["label"],
+                "definition": value["definition"].rstrip("\r\n"),
+                "preferred_url": value["url"],
+            }
+            search_result[str(option)] = key
+            option += 1
+    return option
+
+
+def _collect_owl_candidates(
+    nidm_owl_graph, search_term: str, search_result: dict, option: int
+) -> int:
+    """Append matches from the optional NIDM OWL graph."""
+    if nidm_owl_graph is None:
+        return option
+    matches = fuzzy_match_terms_from_graph(nidm_owl_graph, search_term)
+    first = True
+    for key, value in matches.items():
+        if value["score"] > _CONCEPT_MIN_MATCH_SCORE:
+            if first:
+                print()
+                print("NIDM Ontology Terms:")
+                first = False
+            _print_search_candidate(option, value)
+            _add_candidate_to_search_result(search_result, key, value, option)
+            option += 1
+    return option
+
+
+def find_concept_interactive(
+    source_variable,
+    current_tuple,
+    source_variable_annotations: dict,
+    ilx_obj,
+    ancestor: bool = True,
+    nidm_owl_graph=None,
+):
+    """Interactively map *source_variable* to an existing concept.
+
+    Walks the four candidate sources (NIDM-Terms, InterLex, Cognitive
+    Atlas concepts + disorders, optional NIDM OWL graph) and loops
+    on user input until either a concept is selected or the user
+    picks "No concept needed".  The selected concept's URL+label
+    are written into ``source_variable_annotations[current_tuple]["isAbout"]``
+    as a single-element list (matches the legacy emission shape).
+
+    When *ancestor* is ``True``, only NIDM-Terms used concepts are
+    surfaced (narrow); toggling broadens to include InterLex,
+    Cognitive Atlas, and NIDM OWL.
+    """
+    if (nidm_owl_graph is None) and (ilx_obj is None):
+        print("Both InterLex and NIDM OWL file access is not possible")
+        print(
+            "Check your internet connection and try again or supply a JSON "
+            "annotation file with all the variables mapped to terms"
+        )
+        return source_variable_annotations
+
+    nidmterms_concepts = load_nidm_terms_concepts()
+
+    # Lazy import: cognitiveatlas is a heavy dep with its own HTTP.
+    try:
+        from cognitiveatlas.api import get_concept, get_disorder
+
+        cogatlas_concepts = get_concept(silent=True)
+        cogatlas_disorders = get_disorder(silent=True)
+    except Exception:
+        cogatlas_concepts = None
+        cogatlas_disorders = None
+
+    search_term = str(source_variable)
+    go_loop = True
+    while go_loop:
+        option = 1
+        search_result: dict = {}
+        print()
+        print("Concept Association")
+        print(f"Query String: {search_term} ")
+
+        # NIDM-Terms used-concepts are always shown.
+        option = _collect_nidmterms_candidates(
+            nidmterms_concepts, search_term, search_result, option
+        )
+
+        if not ancestor:
+            # Broaden: hit InterLex, Cognitive Atlas, and NIDM OWL too.
+            option = _collect_interlex_candidates(
+                ilx_obj, search_term, search_result, option
+            )
+            if cogatlas_concepts is not None:
+                option = _collect_cogatlas_candidates(
+                    cogatlas_concepts.json,
+                    search_term,
+                    search_result,
+                    option,
+                    header="Cognitive Atlas:",
+                )
+            if cogatlas_disorders is not None:
+                option = _collect_cogatlas_candidates(
+                    cogatlas_disorders.json,
+                    search_term,
+                    search_result,
+                    option,
+                    header="",
+                )
+            option = _collect_owl_candidates(
+                nidm_owl_graph, search_term, search_result, option
+            )
+
+        print()
+        if ancestor:
+            print(
+                f"{option}: Broaden Search (includes interlex, cogatlas, and nidm ontology) "
+            )
+        else:
+            print(
+                f"{option}: Narrow Search (includes nidm-terms previously used concepts) "
+            )
+        option += 1
+        print(f'{option}: Change query string from: "{search_term}"')
+        option += 1
+        print(f"{option}: No concept needed for this variable")
+        print("*" * 87)
+
+        selection = input(f"Please select an option (1:{option}) from above: \t")
+        while (not selection.isdigit()) or (int(selection) > int(option)):
+            selection = input(f"Please select an option (1:{option}) from above: \t")
+
+        sel_int = int(selection)
+        if sel_int == (option - 2):
+            # Toggle broaden / narrow.
+            ancestor = not ancestor
+        elif sel_int == (option - 1):
+            search_term = input(
+                f"Please input new search string for CSV column: {source_variable} \t:"
+            )
+            print("*" * 87)
+        elif sel_int == option:
+            # No concept needed -- bail out without writing isAbout.
+            go_loop = False
+        else:
+            # User picked one of the numbered candidates.
+            picked_key = search_result[selection]
+            entry = search_result[picked_key]
+            source_variable_annotations[current_tuple]["isAbout"] = [
+                {
+                    "@id": entry["preferred_url"],
+                    "label": entry["label"],
+                }
+            ]
+            print(
+                "\nConcept annotation added for source variable:", source_variable
+            )
+            go_loop = False
+
+    return source_variable_annotations
+
+
+def define_new_concept(source_variable, ilx_obj):
+    """Prompt for label + definition and register the result in InterLex.
+
+    Thin port of the legacy helper -- returns whatever
+    :func:`AddConceptToInterlex` returns.
+    """
+    print("\nYou selected to enter a new concept for CSV column:", source_variable)
+    concept_label = input(
+        f"Please enter a label for the new concept [{source_variable}]:\t"
+    )
+    concept_definition = input("Please enter a definition for this concept:\t")
+    return AddConceptToInterlex(
+        ilx_obj=ilx_obj, label=concept_label, definition=concept_definition
+    )
+
+
+# Map from menu option (1-11) -> XSD type URI.  Used by
+# ``annotate_data_element``.  Option 2 is "categorical" -> complexType.
+_DATATYPE_MENU: dict = {
+    1: XSD["string"],
+    2: XSD["complexType"],
+    3: XSD["boolean"],
+    4: XSD["integer"],
+    5: XSD["float"],
+    6: XSD["double"],
+    7: XSD["duration"],
+    8: XSD["dateTime"],
+    9: XSD["time"],
+    10: XSD["date"],
+    11: XSD["anyURI"],
+}
+
+
+def _prompt_datatype() -> URIRef:
+    """Print the 11-option datatype menu and return the chosen XSD URI."""
+    while True:
+        print("Please enter the value type for this term from the following list:")
+        print("\t 1: string - The string datatype represents character strings")
+        print(
+            "\t 2: categorical - A variable that can take on one of a limited "
+            "number of possible values, assigning each to a nominal category "
+            "on the basis of some qualitative property."
+        )
+        print("\t 3: boolean - Binary-valued logic:{true,false}")
+        print(
+            "\t 4: integer - Integer is a number that can be written without "
+            "a fractional component"
+        )
+        print(
+            "\t 5: float - Float consists of the values m × 2^e, where m is "
+            "an integer whose absolute value is less than 2^24, and e is an "
+            "integer between -149 and 104, inclusive"
+        )
+        print(
+            "\t 6: double - Double consists of the values m × 2^e, where m is "
+            "an integer whose absolute value is less than 2^53, and e is an "
+            "integer between -1075 and 970, inclusive"
+        )
+        print("\t 7: duration - Duration represents a duration of time")
+        print(
+            "\t 8: dateTime - Values with integer-valued year, month, day, "
+            "hour and minute properties, a decimal-valued second property, "
+            "and a boolean timezoned property."
+        )
+        print(
+            "\t 9: time - Time represents an instant of time that recurs every day"
+        )
+        print(
+            "\t 10: date - Date consists of top-open intervals of exactly one "
+            "day in length on the timelines of dateTime, beginning on the "
+            "beginning moment of each day (in each timezone)"
+        )
+        print(
+            "\t 11: anyURI - anyURI represents a Uniform Resource Identifier "
+            "Reference (URI). An anyURI value can be absolute or relative, "
+            "and may have an optional fragment identifier"
+        )
+        choice = input("Please enter the datatype [1:11]:\t")
+        try:
+            num = int(choice)
+        except ValueError:
+            continue
+        if num in _DATATYPE_MENU:
+            return URIRef(_DATATYPE_MENU[num])
+
+
+def _prompt_categorical_choices() -> Tuple[Any, bool]:
+    """Prompt for the number of categories and category labels/values.
+
+    Returns ``(choices, had_numeric_values)`` where *choices* is
+    either a ``dict[label -> value]`` (when the user said the
+    categories have associated values) or a ``list[label]``.
+    """
+    while True:
+        num_categories = input(
+            "Please enter the number of categories/labels for this term:\t"
+        )
+        try:
+            n = int(num_categories)
+            break
+        except ValueError:
+            print("That's not an integer, please try again!")
+
+    has_values_input = input(
+        "Are there numerical values associated with your text-based categories [yes]?\t"
+    )
+    if has_values_input in ("Y", "y", "YES", "yes", "Yes", ""):
+        term_category: Any = {}
+        for category in range(1, n + 1):
+            cat_label = input(
+                f"Please enter the text string label for the category {category}:\t"
+            )
+            cat_value = input(
+                f'Please enter the value associated with label "{cat_label}":\t'
+            )
+            term_category[cat_label] = cat_value
+        return term_category, True
+
+    term_category = []
+    for category in range(1, n + 1):
+        cat_label = input(
+            f"Please enter the text string label for the category {category}:\t"
+        )
+        term_category.append(cat_label)
+    return term_category, False
+
+
+def annotate_data_element(
+    source_variable, current_tuple, source_variable_annotations: dict
+) -> None:
+    """Interactively collect label / description / datatype / min / max /
+    categories for *source_variable* and write them into
+    ``source_variable_annotations[current_tuple]``.
+
+    Mutates the supplied dict in place (legacy parity); returns None.
+    """
+    print(
+        "\nYou will now be asked a series of questions to annotate your term:",
+        source_variable,
+    )
+
+    term_label = input(
+        f"Please enter a full name to associate with the term [{source_variable}]:\t"
+    )
+    if term_label == "":
+        term_label = source_variable
+
+    term_definition = input("Please enter a definition for this term:\t")
+    term_datatype = _prompt_datatype()
+
+    # Categorical -> collect choices; scalar -> collect min/max/units.
+    term_category: Any = None
+    had_numeric_values = False
+    if term_datatype == URIRef(XSD["complexType"]):
+        term_category, had_numeric_values = _prompt_categorical_choices()
+
+    entry = source_variable_annotations.setdefault(current_tuple, {})
+    response_opts = entry.setdefault("responseOptions", {})
+
+    if term_datatype != URIRef(XSD["complexType"]):
+        term_min = input("Please enter the minimum value [NA]:\t")
+        term_max = input("Please enter the maximum value [NA]:\t")
+        term_units = input("Please enter the units [NA]:\t")
+        response_opts["unitCode"] = term_units
+        response_opts["minValue"] = term_min
+        response_opts["maxValue"] = term_max
+    elif had_numeric_values:
+        response_opts["minValue"] = min(term_category.values())
+        response_opts["maxValue"] = max(term_category.values())
+        response_opts["unitCode"] = "NA"
+    else:
+        response_opts["minValue"] = "NA"
+        response_opts["maxValue"] = "NA"
+        response_opts["unitCode"] = "NA"
+
+    entry["label"] = term_label
+    entry["description"] = term_definition
+    entry["source_variable"] = str(source_variable)
+    response_opts["valueType"] = term_datatype
+    entry["associatedWith"] = "NIDM"
+
+    if term_datatype == URIRef(XSD["complexType"]):
+        response_opts["choices"] = term_category
+
+    # Echo the stored mapping back to the user.
+    print("\n" + ("*" * 85))
+    print(f"Stored mapping: {source_variable} ->  ")
+    print("label:", entry["label"])
+    print("source variable:", entry["source_variable"])
+    print("description:", entry["description"])
+    print("valueType:", response_opts["valueType"])
+    if "hasUnit" in entry:
+        print("hasUnit:", entry["hasUnit"])
+    elif "unitCode" in response_opts:
+        print("hasUnit:", response_opts["unitCode"])
+    if "minValue" in response_opts:
+        print("minimumValue:", response_opts["minValue"])
+    if "maxValue" in response_opts:
+        print("maximumValue:", response_opts["maxValue"])
+    if term_datatype == URIRef(XSD["complexType"]):
+        print("choices:", response_opts["choices"])
+    print("-" * 87)
+
+
 __all__ = [
     "safe_string",
     "validate_uuid",
@@ -1503,4 +1996,8 @@ __all__ = [
     # Chunk 15.6 -- data-dictionary -> NIDM CDE graph
     "DD_UUID",
     "DD_to_nidm",
+    # Chunk 15.5c -- interactive concept helpers
+    "find_concept_interactive",
+    "define_new_concept",
+    "annotate_data_element",
 ]
