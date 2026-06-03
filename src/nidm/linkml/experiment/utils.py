@@ -1956,6 +1956,477 @@ def annotate_data_element(
     print("-" * 87)
 
 
+# ---------------------------------------------------------------------------
+# Chunk 15.5b -- map_variables_to_terms.
+#
+# This is the keystone of the variable-mapping pipeline: walk a
+# dataframe's columns and produce a ``{DD()-string: annotation-dict}``
+# mapping for downstream NIDM CDE construction.  It supports three
+# input shapes for the optional ``json_source``:
+#
+#   * a path to a JSON file on disk;
+#   * a Python dict (already-parsed JSON);
+#   * absent -- the user is prompted interactively for each variable.
+#
+# The legacy implementation was a single 700-line function with heavy
+# nesting.  Here it's broken into a handful of named sub-helpers so
+# each step is easier to test in isolation.
+# ---------------------------------------------------------------------------
+
+
+def _load_json_source(json_source):
+    """Resolve *json_source* to a dict.
+
+    Accepts a path-to-file, a dict, or ``None``.  Mirrors the legacy
+    contract: invalid input prints an error and ``sys.exit()``s.
+    """
+    if json_source is None:
+        return None
+    try:
+        if os.path.isfile(json_source):
+            with open(json_source, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        print("ERROR: Can't open json mapping file:", json_source)
+        sys.exit()
+    except Exception:
+        if not isinstance(json_source, dict):
+            print(
+                "ERROR: Invalid JSON file supplied.  Please check your JSON file "
+                "with a validator first!"
+            )
+            print("exiting!")
+            sys.exit()
+        return json_source
+
+
+def _find_json_key_for_column(json_map: Mapping[str, Any], column: str):
+    """Return the json_map key matching *column*, or None.
+
+    Tries the legacy DD()-style key first
+    (``DD(source='x', variable='age')``), then falls back to a flat
+    BIDS-style match (``key == column``).  When multiple matches
+    exist, prints a warning and returns None (matches legacy).
+    """
+    col = column.lstrip().rstrip()
+    try:
+        keys = [
+            k
+            for k in json_map
+            if col
+            == k.split("variable")[1].split("=")[1].split(")")[0].lstrip("'").rstrip("'")
+        ]
+    except IndexError:
+        keys = [k for k in json_map if col == k]
+
+    if len(keys) > 1:
+        print(
+            "The supplied JSON files has more than one entry for variable: %s " % column
+        )
+        print(
+            "Either stop this program, fix the JSON file and re-run or you will be "
+            "asked to annotate this variable interactively"
+        )
+        return None
+    if len(keys) == 1:
+        return " ".join(map(str, keys))
+    return None
+
+
+def _copy_label_description(entry: dict, src: Mapping, fallback_key: str) -> None:
+    """Copy label + description fields into *entry* with legacy fallbacks.
+
+    Tries label, then source_variable, then sourceVariable, finally
+    *fallback_key*.  Tries description, then BIDS-style Description,
+    finally empty string.
+    """
+    if "label" in src:
+        entry["label"] = src["label"]
+    elif "source_variable" in src:
+        entry["label"] = src["source_variable"]
+    elif "sourceVariable" in src:
+        entry["label"] = src["sourceVariable"]
+    else:
+        entry["label"] = fallback_key
+        print(
+            "No label or source_variable/SourceVariable key found in json mapping "
+            f"file for variable {fallback_key}. This is ok if this is a BIDS json "
+            "sidecar file.  Otherwise, consider adding a label to the json file."
+        )
+    if "description" in src:
+        entry["description"] = src["description"]
+    elif "Description" in src:
+        entry["description"] = src["Description"]
+    else:
+        entry["description"] = ""
+
+
+def _copy_optional_scalar_fields(
+    entry: dict, src: Mapping, column: str
+) -> None:
+    """Copy url / sameAs / source_variable / associatedWith / allowableValues.
+
+    Falls back to *column* for source_variable when absent.
+    """
+    for k in ("url", "sameAs", "associatedWith", "allowableValues"):
+        if k in src:
+            entry[k] = src[k]
+    if "source_variable" in src:
+        entry["source_variable"] = src["source_variable"]
+    elif "sourceVariable" in src:
+        entry["source_variable"] = src["sourceVariable"]
+    else:
+        entry["source_variable"] = str(column)
+        print(f"Added source variable ({column}) to annotations")
+
+
+def _copy_response_options(entry: dict, src: Mapping) -> None:
+    """Migrate ReproSchema ``responseOptions`` block + top-level
+    ``levels`` / ``valueType`` / ``minValue`` / ``maxValue`` / ``hasUnit``
+    aliases into *entry*."""
+
+    def _ro() -> dict:
+        return entry.setdefault("responseOptions", {})
+
+    if "responseOptions" in src:
+        ro_src = src["responseOptions"]
+        for subkey in ro_src:
+            if "valueType" in subkey:
+                _ro()["valueType"] = ro_src["valueType"]
+            elif "minValue" in subkey:
+                _ro()["minValue"] = ro_src["minValue"]
+            elif "maxValue" in subkey:
+                _ro()["maxValue"] = ro_src["maxValue"]
+            elif "choices" in subkey:
+                _ro()["choices"] = ro_src["choices"]
+            elif "hasUnit" in subkey:
+                _ro()["unitCode"] = ro_src["hasUnit"]
+            elif "unitCode" in subkey:
+                _ro()["unitCode"] = ro_src["unitCode"]
+
+    # Top-level levels / Levels are also accepted as "choices".
+    if "levels" in src:
+        _ro()["choices"] = src["levels"]
+    elif "Levels" in src:
+        _ro()["choices"] = src["Levels"]
+
+    # Top-level aliases for value/min/max/units survive at top level
+    # (this matches the legacy ambiguous shape; downstream DD_to_nidm
+    # accepts both).
+    if "valueType" in src:
+        entry["valueType"] = src["valueType"]
+    if "minValue" in src:
+        entry["minValue"] = src["minValue"]
+    elif "minimumValue" in src:
+        entry["minValue"] = src["minimumValue"]
+    if "maxValue" in src:
+        entry["maxValue"] = src["maxValue"]
+    elif "maximumValue" in src:
+        entry["maxValue"] = src["maximumValue"]
+    if "hasUnit" in src:
+        entry["unitCode"] = src["hasUnit"]
+    elif "Units" in src:
+        entry["unitCode"] = src["Units"]
+
+
+def _copy_isabout(entry: dict, src: Mapping) -> bool:
+    """Normalize *src*'s isAbout into ``entry["isAbout"]`` (always a list).
+
+    Returns ``True`` when a non-empty isAbout was found and applied,
+    ``False`` when isAbout is absent or empty (caller will then
+    prompt the user or auto-map).
+    """
+    if "isAbout" not in src:
+        return False
+    val = src["isAbout"]
+    if isinstance(val, list):
+        if not val:
+            return False
+        entry["isAbout"] = []
+        for sub in val:
+            if "label" in sub:
+                entry["isAbout"].append({"@id": sub["@id"], "label": sub["label"]})
+            else:
+                entry["isAbout"].append({"@id": sub["@id"]})
+        return True
+    # Single dict -> list.
+    entry["isAbout"] = []
+    id_key = "url" if "url" in val else "@id"
+    if "label" in val:
+        entry["isAbout"].append({"@id": val[id_key], "label": val["label"]})
+    else:
+        entry["isAbout"].append({"@id": val[id_key]})
+    return True
+
+
+def _auto_map_participant_id(
+    column_to_terms: dict, search_term: str, assessment_name: str
+) -> None:
+    """Auto-map a participant/subject_id column to ``NIDM_SUBJECTID``.
+
+    Writes a complete annotation entry under a fresh DD key so
+    callers can ``continue`` past the interactive flow for this
+    column.
+    """
+    subjid_tuple = str(DD(source=assessment_name, variable=search_term))
+    entry = column_to_terms.setdefault(subjid_tuple, {})
+    entry["label"] = search_term
+    entry["description"] = "subject/participant identifier"
+    entry["source_variable"] = str(search_term)
+    entry["responseOptions"] = {"valueType": URIRef(XSD["string"])}
+    subject_id_uri = str(_constants.NIDM_SUBJECTID)
+    subject_id_label = subject_id_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+    entry["isAbout"] = [{"@id": subject_id_uri, "label": subject_id_label}]
+
+
+def _register_pde_in_interlex(
+    ilx_obj, entry: dict
+) -> Optional[str]:
+    """Best-effort: register *entry* as a PDE in InterLex.
+
+    Returns the response IRI on success, ``None`` on any error
+    (matches legacy quiet-failure behavior).  The 4 legacy branches
+    (has-levels/has-isAbout x4) collapse to one call site by
+    threading the optional kwargs through.
+    """
+    try:
+        kwargs = {
+            "ilx_obj": ilx_obj,
+            "label": entry["label"],
+            "definition": entry["description"],
+            "min": entry["minValue"],
+            "max": entry["maxValue"],
+            "units": entry["hasUnit"],
+            "datatype": entry["valueType"],
+        }
+        if "isAbout" in entry:
+            kwargs["isabout"] = entry["isAbout"]
+        if "levels" in entry:
+            kwargs["categorymappings"] = _json.dumps(entry["levels"])
+        ilx_output = AddPDEToInterlex(**kwargs)
+        return ilx_output.iri
+    except Exception:
+        print("WARNING: WIP: Data element not submitted to InterLex.  ")
+        return None
+
+
+def _load_owl_graph(owl_file):
+    """Return the OWL graph to use for term search.
+
+    ``"nidm"`` (the default) hits the canonical NIDM OWL set;
+    any other non-None value is treated as a path/URL the user
+    supplied; ``None`` disables OWL search entirely.
+    """
+    if owl_file == "nidm":
+        try:
+            return load_nidm_owl_files()
+        except Exception:
+            print()
+            print("ERROR: initializing internet connection to NIDM OWL files...")
+            print("You will not be able to select terms from NIDM OWL files.")
+            return None
+    if owl_file is None:
+        return None
+    g = Graph()
+    g.parse(location=owl_file)
+    return g
+
+
+def _init_interlex():
+    """Best-effort InterLex client.  None on failure (matches legacy)."""
+    try:
+        return InitializeInterlexRemote()
+    except Exception:
+        print("ERROR: initializing InterLex connection...")
+        print("You will not be able to add or query for concepts.")
+        return None
+
+
+def _print_loaded_annotation(column: str, entry: dict, json_map_entry: Mapping) -> None:
+    """Pretty-print the just-loaded annotation for *column* (legacy echo)."""
+    print("\n" + ("*" * 85))
+    print(f"Column {column} already annotated in user supplied JSON mapping file")
+    print("label:", entry["label"])
+    print("description:", entry["description"])
+    if "url" in entry:
+        print("url:", entry["url"])
+    if "sameAs" in entry:
+        print("sameAs:", entry["sameAs"])
+    print("source variable:", entry["source_variable"])
+    if "associatedWith" in entry:
+        print("associatedWith:", entry["associatedWith"])
+    if "allowableValues" in entry:
+        print("allowableValues:", entry["allowableValues"])
+    # responseOptions and isAbout are noisy; trust the user already
+    # had visibility into the source json_map entry.
+    if "responseOptions" in entry:
+        for k, v in entry["responseOptions"].items():
+            print(f"{k}: {v}")
+    if "isAbout" in entry:
+        for sub in entry["isAbout"]:
+            label = sub.get("label", "")
+            print(f"isAbout: @id = {sub['@id']}, label = {label}")
+    # Suppress noise from json_map_entry; used only by callers wanting
+    # full echo of the on-disk version.
+    del json_map_entry
+
+
+def _handle_json_mapped_column(
+    column: str,
+    current_tuple: str,
+    json_map: Mapping,
+    json_key: str,
+    column_to_terms: dict,
+    ilx_obj,
+    nidm_owl_graph,
+    associate_concepts: bool,
+    output_file: str,
+    bids: bool,
+) -> bool:
+    """Process *column* against an existing json_map entry.
+
+    Returns ``True`` if any annotation was made interactively
+    (so the caller knows to persist the json mapping file).
+    """
+    src = json_map[json_key]
+    entry = column_to_terms.setdefault(current_tuple, {})
+    print(f"json_key={json_key}, column={column}")
+
+    _copy_label_description(entry, src, fallback_key=json_key)
+    _copy_optional_scalar_fields(entry, src, column)
+    _copy_response_options(entry, src)
+
+    annot_made = False
+    if not _copy_isabout(entry, src):
+        # json entry had no isAbout (or empty list).  If the variable
+        # is a participant-id field, auto-map; else maybe prompt.
+        if match_participant_id_field(entry["source_variable"]):
+            subject_id_uri = str(_constants.NIDM_SUBJECTID)
+            subject_id_label = subject_id_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+            entry["isAbout"] = [
+                {"@id": subject_id_uri, "label": subject_id_label}
+            ]
+            write_json_mapping_file(column_to_terms, output_file, bids)
+        elif associate_concepts:
+            find_concept_interactive(
+                column,
+                current_tuple,
+                column_to_terms,
+                ilx_obj,
+                nidm_owl_graph=nidm_owl_graph,
+            )
+            annot_made = True
+            write_json_mapping_file(column_to_terms, output_file, bids)
+
+    _print_loaded_annotation(column, entry, src)
+    print("*" * 87)
+    print("-" * 87)
+    return annot_made
+
+
+def map_variables_to_terms(
+    df,
+    directory,
+    assessment_name,
+    output_file=None,
+    json_source=None,
+    bids: bool = False,
+    owl_file: Optional[str] = "nidm",
+    associate_concepts: bool = True,
+    cde_namespace=None,
+):
+    """Walk *df.columns* and build the variable-annotation mapping.
+
+    For each column, in order:
+
+      1. If *json_source* is supplied and matches the column, copy
+         the existing annotation forward (label / description /
+         responseOptions / isAbout / etc.).  If no isAbout is present
+         and the column looks like a participant-id field, auto-map
+         to ``NIDM_SUBJECTID``; otherwise (when *associate_concepts*)
+         interactively prompt the user.
+      2. Otherwise, auto-map participant-id columns or interactively
+         annotate via :func:`annotate_data_element` +
+         :func:`find_concept_interactive`.
+      3. Best-effort register the result as a PDE in InterLex.
+
+    Returns ``[column_to_terms, cde_graph]`` where ``cde_graph`` is
+    produced by :func:`DD_to_nidm` against the final ``column_to_terms``.
+    """
+    annot_made = False
+    column_to_terms: dict = {}
+
+    json_map = _load_json_source(json_source)
+    if output_file is None:
+        output_file = os.path.join(directory, "nidm_annotations.json")
+
+    ilx_obj = _init_interlex()
+    nidm_owl_graph = _load_owl_graph(owl_file)
+
+    for column in df.columns:
+        current_tuple = str(DD(source=assessment_name, variable=column))
+
+        if json_map is not None:
+            json_key = _find_json_key_for_column(json_map, column)
+            if json_key is not None:
+                made = _handle_json_mapped_column(
+                    column=column,
+                    current_tuple=current_tuple,
+                    json_map=json_map,
+                    json_key=json_key,
+                    column_to_terms=column_to_terms,
+                    ilx_obj=ilx_obj,
+                    nidm_owl_graph=nidm_owl_graph,
+                    associate_concepts=associate_concepts,
+                    output_file=output_file,
+                    bids=bids,
+                )
+                annot_made = annot_made or made
+                continue
+        else:
+            print("json annotation file not supplied")
+
+        search_term = str(column)
+        if match_participant_id_field(search_term.lower()):
+            _auto_map_participant_id(column_to_terms, search_term, assessment_name)
+            print(
+                f"Variable {search_term} automatically mapped to participant/subject identifier"
+            )
+            subj_entry = column_to_terms[
+                str(DD(source=assessment_name, variable=search_term))
+            ]
+            print("Label:", subj_entry["label"])
+            print("Description:", subj_entry["description"])
+            print("Source Variable:", subj_entry["source_variable"])
+            print("-" * 87)
+            continue
+
+        if current_tuple not in column_to_terms:
+            column_to_terms[current_tuple] = {}
+            annotate_data_element(column, current_tuple, column_to_terms)
+            annot_made = True
+
+        if associate_concepts:
+            find_concept_interactive(
+                column,
+                current_tuple,
+                column_to_terms,
+                ilx_obj,
+                nidm_owl_graph=nidm_owl_graph,
+            )
+            annot_made = True
+            write_json_mapping_file(column_to_terms, output_file, bids)
+
+        url = _register_pde_in_interlex(ilx_obj, column_to_terms[current_tuple])
+        if url is not None:
+            column_to_terms[current_tuple]["url"] = url
+
+    if annot_made:
+        write_json_mapping_file(column_to_terms, output_file, bids)
+
+    cde = DD_to_nidm(column_to_terms, cde_namespace=cde_namespace)
+    return [column_to_terms, cde]
+
+
 __all__ = [
     "safe_string",
     "validate_uuid",
@@ -2000,4 +2471,6 @@ __all__ = [
     "find_concept_interactive",
     "define_new_concept",
     "annotate_data_element",
+    # Chunk 15.5b -- variable -> term mapping keystone
+    "map_variables_to_terms",
 ]
