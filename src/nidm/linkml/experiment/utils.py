@@ -1744,9 +1744,7 @@ def find_concept_interactive(
                     "label": entry["label"],
                 }
             ]
-            print(
-                "\nConcept annotation added for source variable:", source_variable
-            )
+            print("\nConcept annotation added for source variable:", source_variable)
             go_loop = False
 
     return source_variable_annotations
@@ -1816,9 +1814,7 @@ def _prompt_datatype() -> URIRef:
             "hour and minute properties, a decimal-valued second property, "
             "and a boolean timezoned property."
         )
-        print(
-            "\t 9: time - Time represents an instant of time that recurs every day"
-        )
+        print("\t 9: time - Time represents an instant of time that recurs every day")
         print(
             "\t 10: date - Date consists of top-open intervals of exactly one "
             "day in length on the timelines of dateTime, beginning on the "
@@ -2013,7 +2009,11 @@ def _find_json_key_for_column(json_map: Mapping[str, Any], column: str):
             k
             for k in json_map
             if col
-            == k.split("variable")[1].split("=")[1].split(")")[0].lstrip("'").rstrip("'")
+            == k.split("variable")[1]
+            .split("=")[1]
+            .split(")")[0]
+            .lstrip("'")
+            .rstrip("'")
         ]
     except IndexError:
         keys = [k for k in json_map if col == k]
@@ -2060,9 +2060,7 @@ def _copy_label_description(entry: dict, src: Mapping, fallback_key: str) -> Non
         entry["description"] = ""
 
 
-def _copy_optional_scalar_fields(
-    entry: dict, src: Mapping, column: str
-) -> None:
+def _copy_optional_scalar_fields(entry: dict, src: Mapping, column: str) -> None:
     """Copy url / sameAs / source_variable / associatedWith / allowableValues.
 
     Falls back to *column* for source_variable when absent.
@@ -2178,9 +2176,7 @@ def _auto_map_participant_id(
     entry["isAbout"] = [{"@id": subject_id_uri, "label": subject_id_label}]
 
 
-def _register_pde_in_interlex(
-    ilx_obj, entry: dict
-) -> Optional[str]:
+def _register_pde_in_interlex(ilx_obj, entry: dict) -> Optional[str]:
     """Best-effort: register *entry* as a PDE in InterLex.
 
     Returns the response IRI on success, ``None`` on any error
@@ -2302,9 +2298,7 @@ def _handle_json_mapped_column(
         if match_participant_id_field(entry["source_variable"]):
             subject_id_uri = str(_constants.NIDM_SUBJECTID)
             subject_id_label = subject_id_uri.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-            entry["isAbout"] = [
-                {"@id": subject_id_uri, "label": subject_id_label}
-            ]
+            entry["isAbout"] = [{"@id": subject_id_uri, "label": subject_id_label}]
             write_json_mapping_file(column_to_terms, output_file, bids)
         elif associate_concepts:
             find_concept_interactive(

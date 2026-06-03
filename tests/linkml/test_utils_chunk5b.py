@@ -95,9 +95,7 @@ def test_copy_label_description_prefers_label():
 
 def test_copy_label_description_uses_source_variable_fallback():
     entry = {}
-    utils._copy_label_description(
-        entry, {"source_variable": "age"}, fallback_key="x"
-    )
+    utils._copy_label_description(entry, {"source_variable": "age"}, fallback_key="x")
     assert entry["label"] == "age"
 
 
@@ -248,9 +246,7 @@ def test_copy_isabout_single_dict_with_url_normalized_to_list():
 
 def test_copy_isabout_single_dict_with_id_no_label():
     entry = {}
-    applied = utils._copy_isabout(
-        entry, {"isAbout": {"@id": "http://example.org/a"}}
-    )
+    applied = utils._copy_isabout(entry, {"isAbout": {"@id": "http://example.org/a"}})
     assert applied is True
     assert entry["isAbout"] == [{"@id": "http://example.org/a"}]
 
@@ -384,7 +380,7 @@ def test_init_interlex_returns_client_on_success():
 def _setup_non_interactive_mocks(monkeypatch):
     """Stub out the network + interactive pieces for end-to-end tests."""
     monkeypatch.setattr(utils, "_init_interlex", lambda: None)
-    monkeypatch.setattr(utils, "_load_owl_graph", lambda owl: None)
+    monkeypatch.setattr(utils, "_load_owl_graph", lambda owl: None)  # noqa: U100
 
 
 def test_map_variables_to_terms_with_full_json_source(monkeypatch, tmp_path: Path):
@@ -396,9 +392,7 @@ def test_map_variables_to_terms_with_full_json_source(monkeypatch, tmp_path: Pat
             "label": "Age",
             "description": "Participant age",
             "source_variable": "age",
-            "isAbout": [
-                {"@id": "http://example.org/age", "label": "Age concept"}
-            ],
+            "isAbout": [{"@id": "http://example.org/age", "label": "Age concept"}],
         },
         str(DD(source="assess1", variable="weight")): {
             "label": "Weight",
@@ -427,9 +421,7 @@ def test_map_variables_to_terms_with_full_json_source(monkeypatch, tmp_path: Pat
     ]
 
 
-def test_map_variables_to_terms_auto_maps_participant_id(
-    monkeypatch, tmp_path: Path
-):
+def test_map_variables_to_terms_auto_maps_participant_id(monkeypatch, tmp_path: Path):
     """A `participant_id` column auto-maps without prompting."""
     _setup_non_interactive_mocks(monkeypatch)
     df = pd.DataFrame({"participant_id": ["sub-01", "sub-02"]})

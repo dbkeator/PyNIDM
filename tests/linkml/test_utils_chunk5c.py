@@ -32,7 +32,7 @@ def test_find_concept_interactive_no_sources_returns_unchanged():
     assert "isAbout" not in annotations["DD(source='x', variable='age')"]
 
 
-def test_find_concept_interactive_no_concept_needed_path(monkeypatch):
+def test_find_concept_interactive_no_concept_needed_path():
     """User picks 'No concept needed' -> loop exits without writing isAbout."""
     annotations = {"DD(source='x', variable='age')": {}}
 
@@ -65,7 +65,7 @@ def test_find_concept_interactive_no_concept_needed_path(monkeypatch):
     assert "isAbout" not in result["DD(source='x', variable='age')"]
 
 
-def test_find_concept_interactive_pick_nidmterms_candidate(monkeypatch):
+def test_find_concept_interactive_pick_nidmterms_candidate():
     """Picking a numbered NIDM-Terms candidate writes isAbout."""
     annotations = {"DD(source='x', variable='age')": {}}
 
@@ -80,11 +80,9 @@ def test_find_concept_interactive_pick_nidmterms_candidate(monkeypatch):
     }
 
     # input: "1" selects the single candidate (option 1).
-    with patch.object(
-        utils, "load_nidm_terms_concepts", return_value=nidmterms
-    ), patch("builtins.input", return_value="1"), patch.dict(
-        "sys.modules", {"cognitiveatlas.api": MagicMock()}
-    ):
+    with patch.object(utils, "load_nidm_terms_concepts", return_value=nidmterms), patch(
+        "builtins.input", return_value="1"
+    ), patch.dict("sys.modules", {"cognitiveatlas.api": MagicMock()}):
         import sys
 
         sys.modules["cognitiveatlas.api"].get_concept = MagicMock(
@@ -114,7 +112,7 @@ def test_find_concept_interactive_pick_nidmterms_candidate(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_define_new_concept_calls_add_concept_to_interlex(monkeypatch):
+def test_define_new_concept_calls_add_concept_to_interlex():
     ilx_obj = MagicMock()
     # First input: label, second input: definition.
     with patch("builtins.input", side_effect=["new label", "new def"]), patch.object(
@@ -169,8 +167,10 @@ def test_prompt_categorical_choices_with_values_returns_dict():
     inputs = [
         "2",  # number of categories
         "yes",  # has numeric values
-        "Male", "1",  # cat 1
-        "Female", "2",  # cat 2
+        "Male",
+        "1",  # cat 1
+        "Female",
+        "2",  # cat 2
     ]
     with patch("builtins.input", side_effect=inputs):
         choices, had_numeric = utils._prompt_categorical_choices()
@@ -247,8 +247,10 @@ def test_annotate_data_element_categorical_with_values():
             "2",  # datatype = categorical
             "2",  # num categories
             "yes",  # has values
-            "Male", "1",
-            "Female", "2",
+            "Male",
+            "1",
+            "Female",
+            "2",
         ],
     ):
         utils.annotate_data_element("sex", key, annotations)
