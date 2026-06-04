@@ -771,23 +771,46 @@ def test_emit_bids_constant_cde_entry_builds_full_shape():
     assert len(isabout) == 1
 
 
-def test_phase_d_attaches_value_triple_for_bids_constant_column(tmp_path: Path):
-    """When an args namespace is supplied + a BIDS-known column has a value,
-    the value lands on the AssessmentObject via the BIDS-namespace predicate."""
+def test_phase_d_runs_with_args_when_all_columns_are_bids_known(tmp_path: Path):
+    """When args is supplied AND the only participants.tsv column is the
+    BIDS-known participant_id (which we skip), Phase D no-ops cleanly
+    without interactive prompts from map_variables_to_terms."""
     _write_dataset_description(tmp_path)
     _write_t1w_scan(tmp_path, subject="sub-01")
-    _write_participants_tsv(
-        tmp_path,
-        [{"participant_id": "sub-01", "age": "25"}],
-    )
-    # participant_id is in BIDS_Constants.participants -- but it's the
-    # subject-id field which we skip.  Use a different fake BIDS-known
-    # column path by feeding the args object so the Phase D path runs.
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
     args = _FakeArgs(json_map=False, no_concepts=True)
     project, _, _, _ = bidsmri2project(tmp_path, args=args)
     g = project.graph
     aos = list(g.subjects(RDF.type, _ASSESSMENT_OBJECT_TYPE))
     assert len(aos) == 1
+
+
+def test_phase_d_with_args_and_json_map_covers_non_bids_columns(tmp_path: Path):
+    """Non-BIDS columns (e.g. 'age') don't trigger interactive prompts
+    when the user supplied a json_map covering them."""
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
+    )
+    # A participants.json sidecar covering 'age' so map_variables_to_terms
+    # doesn't need to prompt the user.
+    json_map = tmp_path / "user_map.json"
+    json_map.write_text(
+        '{"DD(source=\'participants.tsv\', variable=\'age\')": '
+        '{"label": "Age", "description": "Age at scan", "source_variable": "age", '
+        '"isAbout": [{"@id": "http://example.org/age", "label": "Age"}]}}'
+    )
+    args = _FakeArgs(json_map=str(json_map), no_concepts=True)
+    project, _, cde, _ = bidsmri2project(tmp_path, args=args)
+    g = project.graph
+    aos = list(g.subjects(RDF.type, _ASSESSMENT_OBJECT_TYPE))
+    assert len(aos) == 1
+    # The CDE graph should now have at least one PersonalDataElement for 'age'.
+    from nidm.linkml.core.namespaces import NIDM as _NIDM
+
+    pdes = list(cde.subjects(RDF.type, _NIDM["PersonalDataElement"]))
+    assert pdes
 
 
 def test_phase_d_returns_nonempty_cde_when_no_unmapped_columns(tmp_path: Path):

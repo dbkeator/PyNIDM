@@ -50,6 +50,7 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 from rdflib import RDF, Graph, Literal, URIRef
+from rdflib.namespace import XSD
 from ..acquisition_object import AcquisitionObject
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
@@ -69,7 +70,6 @@ from ..utils import (
 )
 from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, NFO, PROV, RDFS, SIO
-from rdflib.namespace import XSD
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
 __version__ = "0.5.0"  # Phase D: CDE attachment for participants.tsv columns
@@ -378,9 +378,7 @@ def _emit_bids_constant_cde_entry(cde: Graph, key: str) -> URIRef:
     cde.add((cde_id, RDFS.label, Literal(target_local)))
     cde.add((cde_id, _C.NIDM["isAbout"], URIRef(str(target))))
     cde.add((cde_id, _C.NIDM["source_variable"], Literal(key)))
-    cde.add(
-        (cde_id, _C.NIDM["description"], Literal("participant/subject identifier"))
-    )
+    cde.add((cde_id, _C.NIDM["description"], Literal("participant/subject identifier")))
     cde.add(
         (
             cde_id,
