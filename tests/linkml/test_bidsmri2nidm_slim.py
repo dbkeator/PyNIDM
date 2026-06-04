@@ -544,7 +544,8 @@ def test_participants_tsv_session_is_reused_by_imaging_walk(tmp_path: Path):
 
 def test_participants_tsv_links_person_via_qualified_association(tmp_path: Path):
     """The Person from participants.tsv should be the same as the one
-    linked to the MR acquisition via qualifiedAssociation."""
+    linked to every acquisition's qualifiedAssociation (assessment +
+    imaging both reuse the per-subject Person)."""
     _write_dataset_description(tmp_path)
     _write_t1w_scan(tmp_path, subject="sub-01")
     _write_participants_tsv(tmp_path, [{"participant_id": "sub-01", "age": "25"}])
@@ -553,11 +554,11 @@ def test_participants_tsv_links_person_via_qualified_association(tmp_path: Path)
     persons = list(g.subjects(RDF.type, PROV.Person))
     assert len(persons) == 1  # One Person, reused across assessment + imaging
     person = persons[0]
-    # The MR acquisition's qualifiedAssociation -> the same Person.
-    mr_acqs = list(g.subjects(RDF.type, NIDM.Acquisition))
-    # Filter to just MRAcquisitions (which have hadAcquisitionModality).
-    mr_acqs = [a for a in mr_acqs if list(g.objects(a, NIDM.hadAcquisitionModality))]
-    assert mr_acqs, "expected at least one MRAcquisition"
-    assoc = list(g.objects(mr_acqs[0], PROV.qualifiedAssociation))[0]
-    assoc_person = list(g.objects(assoc, PROV.agent))[0]
-    assert assoc_person == person
+    # Every qualifiedAssociation in the graph should point at the same Person
+    # (we only have one subject here, so all the acqs are for sub-01).
+    acqs = list(g.subjects(RDF.type, NIDM.Acquisition))
+    assert len(acqs) >= 2  # at least the assessment + the MR acquisition
+    for acq in acqs:
+        assoc = list(g.objects(acq, PROV.qualifiedAssociation))[0]
+        assoc_person = list(g.objects(assoc, PROV.agent))[0]
+        assert assoc_person == person

@@ -49,7 +49,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Dict, List, Optional, Tuple
-from rdflib import Graph
+from rdflib import RDF, Graph, Literal, URIRef
 from ..acquisition_object import AcquisitionObject
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
@@ -63,7 +63,7 @@ from ..project import Project
 from ..session import Session
 from ..utils import add_export_provenance
 from ...core import bids_constants as BIDS_Constants
-from ...core.namespaces import BIDS, SIO
+from ...core.namespaces import BIDS, NFO, PROV, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
 __version__ = "0.3.0"  # Phase B: participants.tsv handling
@@ -267,8 +267,6 @@ def _apply_dataset_description(
 
 def _lit(value):
     """Coerce *value* into an rdflib Literal."""
-    from rdflib import Literal
-
     return Literal(value)
 
 
@@ -328,12 +326,7 @@ def _maybe_attach_participants_sidecar(
     if not os.path.isfile(json_path):
         return None
     sidecar = AcquisitionObject(acquisition=acq)
-    # Add bids:sidecar_file type.
-    from rdflib import URIRef
-    sidecar.graph.add((sidecar.identifier, _RDF_TYPE, URIRef(BIDS["sidecar_file"])))
-    # Add filename triple via the NFO predicate.
-    from ...core.namespaces import NFO
-    from rdflib import Literal
+    sidecar.graph.add((sidecar.identifier, RDF.type, URIRef(BIDS["sidecar_file"])))
     sidecar.graph.add(
         (
             sidecar.identifier,
@@ -347,20 +340,16 @@ def _maybe_attach_participants_sidecar(
             ),
         )
     )
-    # Link to the parent assessment entity.
-    from ...core.namespaces import PROV
-    acq_entity.graph.add((acq_entity.identifier, PROV.wasInfluencedBy, sidecar.identifier))
-    # Hadmember on the BIDS Dataset collection.
+    acq_entity.graph.add(
+        (acq_entity.identifier, PROV.wasInfluencedBy, sidecar.identifier)
+    )
     _add_collection_member(collection, sidecar)
     return sidecar
 
 
 def _add_collection_member(collection: Collection, member) -> None:
     """Emit a ``prov:hadMember`` triple linking *collection* to *member*."""
-    from ...core.namespaces import PROV
-    collection.graph.add(
-        (collection.identifier, PROV.hadMember, member.identifier)
-    )
+    collection.graph.add((collection.identifier, PROV.hadMember, member.identifier))
 
 
 def _process_participant_row(
@@ -399,8 +388,6 @@ def _process_participant_row(
     persons_by_subj[subjid] = person
 
     # nfo:filename on the assessment entity -> bids::participants.tsv
-    from ...core.namespaces import NFO
-    from rdflib import Literal
     acq_entity.graph.add(
         (
             acq_entity.identifier,
@@ -421,11 +408,6 @@ def _process_participant_row(
         acq, acq_entity, collection, directory, bids_root
     )
     return subjid
-
-
-# RDF.type cached for the few inline triple emissions above.
-from rdflib import RDF as _RDF  # noqa: E402
-_RDF_TYPE = _RDF.type
 
 
 def bidsmri2project(
