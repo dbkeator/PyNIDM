@@ -460,7 +460,9 @@ def _apply_json_keys(obj, metadata: dict) -> None:
             continue
         predicate = BIDS_Constants.json_keys[normalized_key]
         if isinstance(value, list):
-            obj.graph.add((obj.identifier, predicate, Literal("".join(str(e) for e in value))))
+            obj.graph.add(
+                (obj.identifier, predicate, Literal("".join(str(e) for e in value)))
+            )
         else:
             obj.graph.add((obj.identifier, predicate, Literal(value)))
 
@@ -584,9 +586,7 @@ def _process_scan_file(
     suffix = _suffix_from_filename(scan_path.name) or ""
     _apply_scan_contrast_and_usage(obj, suffix, modality_name)
     _emit_sha512_triple(obj, scan_path, bids_root)
-    add_git_annex_sources(
-        obj=obj, filepath=str(scan_path), bids_root=str(bids_root)
-    )
+    add_git_annex_sources(obj=obj, filepath=str(scan_path), bids_root=str(bids_root))
     _apply_json_keys(obj, _load_sidecar_metadata(scan_path))
     root_json = _ROOT_LEVEL_JSON_BY_DATATYPE.get(modality_name)
     if root_json is not None:
@@ -638,9 +638,7 @@ def addimagingsessions(
 
             if modality == "PET":
                 acq = PETAcquisition(session)
-                obj = PETObject(
-                    acq, filename=_bids_filename(scan_path, bids_root)
-                )
+                obj = PETObject(acq, filename=_bids_filename(scan_path, bids_root))
             else:
                 acq = MRAcquisition(session)
                 contrast = _SUFFIX_TO_CONTRAST.get(suffix)

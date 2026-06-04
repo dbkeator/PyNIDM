@@ -63,6 +63,7 @@ def _write_nonempty_t1w_scan(bids_root: Path, subject: str = "sub-01") -> Path:
     scan.write_bytes(b"fake nifti content for hashing")
     return scan
 
+
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
@@ -654,9 +655,7 @@ def test_sidecar_json_descent_skips_unknown_keys(tmp_path: Path):
     # The unknown key should produce no Literal "ignored" triple.
     from rdflib import Literal as _Lit
 
-    ignored = [
-        t for t in g if isinstance(t[2], _Lit) and str(t[2]) == "ignored"
-    ]
+    ignored = [t for t in g if isinstance(t[2], _Lit) and str(t[2]) == "ignored"]
     assert ignored == []
 
 
