@@ -790,14 +790,12 @@ def test_phase_d_with_args_and_json_map_covers_non_bids_columns(tmp_path: Path):
     when the user supplied a json_map covering them."""
     _write_dataset_description(tmp_path)
     _write_t1w_scan(tmp_path, subject="sub-01")
-    _write_participants_tsv(
-        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
-    )
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01", "age": "25"}])
     # A participants.json sidecar covering 'age' so map_variables_to_terms
     # doesn't need to prompt the user.
     json_map = tmp_path / "user_map.json"
     json_map.write_text(
-        '{"DD(source=\'participants.tsv\', variable=\'age\')": '
+        "{\"DD(source='participants.tsv', variable='age')\": "
         '{"label": "Age", "description": "Age at scan", "source_variable": "age", '
         '"isAbout": [{"@id": "http://example.org/age", "label": "Age"}]}}'
     )
