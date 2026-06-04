@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import pytest
-from rdflib import Graph
+from rdflib import Graph, Literal
 from rdflib.namespace import RDF
 from nidm.linkml.core.namespaces import (
     BIDS,
@@ -748,7 +748,7 @@ def test_resolve_participants_args_respects_explicit_json_map(tmp_path: Path):
     assert json_source == str(custom)
 
 
-def test_emit_bids_constant_cde_entry_builds_full_shape(tmp_path: Path):
+def test_emit_bids_constant_cde_entry_builds_full_shape():
     """The fixed-CDE pattern for a BIDS-known column emits all the
     legacy triples (DataElement type, Entity type, label, isAbout,
     source_variable, description, comment, valueType)."""

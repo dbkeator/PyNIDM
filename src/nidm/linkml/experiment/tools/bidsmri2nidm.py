@@ -68,7 +68,8 @@ from ..utils import (
     map_variables_to_terms,
 )
 from ...core import bids_constants as BIDS_Constants
-from ...core.namespaces import BIDS, NFO, PROV, SIO
+from ...core.namespaces import BIDS, NFO, PROV, RDFS, SIO
+from rdflib.namespace import XSD
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
 __version__ = "0.5.0"  # Phase D: CDE attachment for participants.tsv columns
@@ -374,18 +375,20 @@ def _emit_bids_constant_cde_entry(cde: Graph, key: str) -> URIRef:
     cde.add((cde_id, RDF.type, PROV.Entity))
     target = BIDS_Constants.participants[key]
     target_local = str(target).rsplit("/", 1)[-1].rsplit("#", 1)[-1]
-    cde.add((cde_id, _C.RDFS["label"], Literal(target_local)))
+    cde.add((cde_id, RDFS.label, Literal(target_local)))
     cde.add((cde_id, _C.NIDM["isAbout"], URIRef(str(target))))
     cde.add((cde_id, _C.NIDM["source_variable"], Literal(key)))
-    cde.add((cde_id, _C.NIDM["description"], Literal("participant/subject identifier")))
+    cde.add(
+        (cde_id, _C.NIDM["description"], Literal("participant/subject identifier"))
+    )
     cde.add(
         (
             cde_id,
-            _C.RDFS["comment"],
+            RDFS.comment,
             Literal("BIDS participants_id variable fixed in specification"),
         )
     )
-    cde.add((cde_id, _C.RDFS["valueType"], URIRef(str(_C.XSD["string"]))))
+    cde.add((cde_id, _C.NIDM["valueType"], URIRef(str(XSD.string))))
     return cde_id
 
 
@@ -857,9 +860,7 @@ def bidsmri2project(
     # Phase D: build the CDE graph + column_to_terms once for all rows
     # (mapping is per-column, not per-row).  Returns empty cde + dict
     # when args is None or no non-BIDS columns are present.
-    row_cde, row_column_to_terms = _build_participants_cde(
-        fieldnames, directory, args
-    )
+    row_cde, row_column_to_terms = _build_participants_cde(fieldnames, directory, args)
     if len(row_cde) > 0:
         # Union the participants CDE into the main cde graph so the
         # downstream serializer picks it up.
