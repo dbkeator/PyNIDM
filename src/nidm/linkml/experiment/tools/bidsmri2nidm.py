@@ -1,65 +1,55 @@
 """
-Slim BIDS -> NIDM-Experiment converter.
+BIDS -> NIDM-Experiment converter (RDFLib + LinkML wrapper layer).
 
-This is a *minimum-viable* port of the legacy
-``nidm.experiment.tools.bidsmri2nidm`` rebuilt on the LinkML wrapper
-layer.  It demonstrates that the new wrapper API supports an
-end-to-end "real" tool and gives the parity harness something
-tool-shaped to compare against once Part B lands.
+Rebuilds the legacy ``nidm.experiment.tools.bidsmri2nidm`` on top of
+the new wrapper API.  The port lands in phases; this revision is
+"Phase A": full CLI + harness + ``dataset_description.json`` descent
++ the ``--per_subject`` output mode + shared project/dataset UUIDs
++ the ``_write_nidm_graph`` serialization step using
+``add_export_provenance``.
 
-Scope (slim)
-------------
-For each BIDS dataset directory, this tool produces a NIDM-Experiment
-graph containing:
+The per-subject image-walk is still a single-pass slim implementation
+in this revision; phases B and C replace it with the full
+``participants.tsv -> Person/Demographics`` handling and the
+full ``addimagingsessions`` per-datatype attribute extraction.
 
-  * One ``Project`` (title pulled from ``dataset_description.json``).
-  * One ``Collection`` typed as ``bids:Dataset`` carrying the BIDS
-    version and license.
-  * One ``Person`` and one ``Session`` per ``sub-XX/`` directory.
-  * For each scan file under ``sub-XX/{anat,func,dwi,asl,pet}/``:
-    - One ``MRAcquisition``/``PETAcquisition`` (linked into the Session).
-    - One ``MRObject``/``PETObject`` carrying filename, image contrast
-      type, and image usage type.
-    - A ``prov:qualifiedAssociation`` from the Acquisition to the Person.
-  * One ``SoftwareAgent`` and one ``ExportActivity`` recording the
-    export-provenance of the tool run.
-
-Deferred (NOT in this slim port)
----------------------------------
-  * CDE attachment via ``add_attributes_with_cde``.
-  * Interlex term mapping via ``map_variables_to_terms``.
-  * Git-annex source tracking via ``addGitAnnexSources``.
-  * Sidecar JSON descent (``RepetitionTime``, ``EchoTime``, ``FlipAngle``,
-    ``Manufacturer``, ``ManufacturerModelName``, etc.).
-  * ``participants.tsv`` variable mapping to NIDM personal data elements.
-  * ``--per_subject`` output mode (one file per subject).
-  * fMRI events.tsv handling.
-  * DWI bval/bvec files.
-
-Those are tracked as follow-up work in the [[pynidm-linkml-refactor]]
-memory.  The slim port's purpose is to validate the wrapper API
-end-to-end in tool context and let Part B of the parity harness land
-once we're ready to compare legacy vs new tool output side-by-side.
+Module structure
+----------------
+*  ``getRelPathToBIDS`` / ``getsha512`` / ``check_encoding`` -- small
+   filesystem helpers ported verbatim from legacy.
+*  ``addbidsignore`` -- ensure a path is listed in ``.bidsignore``.
+*  ``_write_nidm_graph`` -- serialize the project graph + CDE union
+   to a turtle file, adding the export-provenance chain.
+*  ``bidsmri2project`` -- the workhorse; returns
+   ``(project, collection, cde, cde_pheno)``.
+*  ``main`` -- argparse + ``--per_subject`` loop.
 
 CLI
 ---
 ::
 
-    python -m nidm.linkml.experiment.tools.bidsmri2nidm \\
-        --bids_dir /path/to/bids \\
-        --output_file /path/to/out.ttl
+    bidsmri2nidm -d /path/to/bids [-o nidm.ttl] [--per_subject] \\
+                 [--bidsignore] [--no_concepts] [--json_map FILE] \\
+                 [--log LOGFILE] [--jsonld]
+
+The console-script entry point is moved to this module in task 12
+(cutover); until then, ``nidm.experiment.tools.bidsmri2nidm`` is
+still the on-disk default.
 """
 from __future__ import annotations
-from argparse import ArgumentParser
-import datetime
+from argparse import ArgumentParser, RawTextHelpFormatter
+import hashlib
+from io import StringIO
 import json
 import logging
 import os
+from os.path import isfile, join
 from pathlib import Path
 import re
-from typing import Optional, Union
+import sys
+from typing import List, Optional, Tuple
+from rdflib import Graph
 from ..collection import Collection
-from ..export_activity import ExportActivity
 from ..mr_acquisition import MRAcquisition
 from ..mr_object import MRObject
 from ..person import Person
@@ -67,17 +57,18 @@ from ..pet_acquisition import PETAcquisition
 from ..pet_object import PETObject
 from ..project import Project
 from ..session import Session
-from ..software_agent import SoftwareAgent
+from ..utils import add_export_provenance
+from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.1.0"  # slim port version, distinct from legacy
-
+__version__ = "0.2.0"  # Phase A of the full port; bumps every phase
 _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# BIDS suffix / directory -> NIDM enum mapping
+# BIDS suffix / directory -> NIDM enum mapping (used in the slim subject loop;
+# Phase C replaces it with the full per-datatype attribute extraction).
 # ---------------------------------------------------------------------------
 
 #: BIDS modality directory -> imaging modality.  Anything not listed is
@@ -113,16 +104,168 @@ _SCAN_FILE_RE = re.compile(
 )
 
 
-def _bids_filename(scan_path: Path, bids_root: Path) -> str:
-    """Return a ``bids::``-prefixed relative path string."""
-    rel = scan_path.resolve().relative_to(bids_root.resolve()).as_posix()
-    return f"bids::{rel}"
+# ---------------------------------------------------------------------------
+# Filesystem helpers (legacy-parity)
+# ---------------------------------------------------------------------------
 
 
-def _suffix_from_filename(filename: str) -> Optional[str]:
-    """Pull the BIDS suffix (e.g. 'T1w') out of a filename, or None."""
-    m = _SCAN_FILE_RE.match(filename)
-    return m.group("suffix") if m else None
+def getRelPathToBIDS(filepath, bids_root, bidsuri_format: bool = False) -> str:
+    """
+    Return a path that is relative to the BIDS root.
+
+    Drop-in port of the legacy helper.  When *bidsuri_format* is
+    ``True`` the result is prefixed with ``bids::`` for use in
+    NIDM-Experiment graphs.
+    """
+    path, file = os.path.split(filepath)
+    relpath = path.replace(str(bids_root), "")
+    file_relpath = os.path.join(relpath, file)
+    if bidsuri_format:
+        file_relpath = f'bids::{file_relpath.lstrip("/")}'
+    return file_relpath
+
+
+def getsha512(filename) -> str:
+    """SHA-512 hex digest of *filename* (matches legacy)."""
+    sha512_hash = hashlib.sha512()
+    with open(filename, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha512_hash.update(byte_block)
+    return sha512_hash.hexdigest()
+
+
+def check_encoding(filename) -> Optional[str]:
+    """Detect *filename*'s text encoding via chardet (matches legacy)."""
+    import chardet  # lazy: heavy import, only needed for participants.tsv
+
+    with open(filename, "rb") as f:
+        result = chardet.detect(f.read())
+    return result["encoding"]
+
+
+def addbidsignore(directory, filename_to_add) -> None:
+    """Append *filename_to_add* to ``directory/.bidsignore`` if not already there.
+
+    Creates the file when missing.  Matches the legacy add-once semantics
+    (a single substring match against the existing file contents).
+    """
+    _log.info("Adding file %s to %s/.bidsignore...", filename_to_add, directory)
+    bidsignore_path = os.path.join(directory, ".bidsignore")
+    if not isfile(bidsignore_path):
+        with open(bidsignore_path, "w", encoding="utf-8") as text_file:
+            print(filename_to_add, file=text_file)
+        return
+    with open(bidsignore_path, encoding="utf-8") as fp:
+        if filename_to_add in fp.read():
+            return
+    with open(bidsignore_path, "a", encoding="utf-8") as text_file:
+        print(filename_to_add, file=text_file)
+
+
+# ---------------------------------------------------------------------------
+# Serialization helper
+# ---------------------------------------------------------------------------
+
+
+def _write_nidm_graph(
+    project: Project,
+    collection: Collection,
+    cde: Graph,
+    cde_pheno: List[Graph],
+    outputfile,
+    bidsignore: bool,
+    directory,
+    bidsignore_name: Optional[str] = None,
+) -> None:
+    """Serialize the union (project + cde + cde_pheno) to *outputfile*.
+
+    Adds export-provenance via :func:`add_export_provenance` so the
+    output mirrors the legacy NIDM-with-provenance shape.  When
+    *bidsignore* is true, the resulting filename is added to the BIDS
+    ``.bidsignore`` file at *directory*.
+    """
+    rdf_graph = Graph()
+    rdf_graph.parse(source=StringIO(project.serialize_turtle()), format="turtle")
+    rdf_graph = rdf_graph + cde
+    for entry in cde_pheno or []:
+        rdf_graph = rdf_graph + entry
+
+    _log.info("Writing NIDM file %s ....", outputfile)
+
+    if bidsignore:
+        addbidsignore(directory, bidsignore_name or os.path.basename(outputfile))
+
+    rdf_graph = add_export_provenance(
+        rdf_graph=rdf_graph,
+        collection=collection,
+        outputfile=outputfile,
+        pynidm_version=_pynidm_version(),
+        tool_version=__version__,
+        script_name="bidsmri2nidm.py",
+        activity_label="Create NIDM RDF from BIDS dataset",
+        output_format="turtle",
+    )
+    rdf_graph.serialize(destination=str(outputfile), format="turtle")
+
+
+# ---------------------------------------------------------------------------
+# dataset_description.json descent
+# ---------------------------------------------------------------------------
+
+
+def _load_dataset_description(directory) -> dict:
+    """Return the parsed ``dataset_description.json`` or sys.exit on error.
+
+    Matches the legacy contract: a missing file at the BIDS root is a
+    fatal error (logged critical + sys.exit(-1)).
+    """
+    desc_path = os.path.join(directory, "dataset_description.json")
+    if not os.path.isdir(directory):
+        _log.critical("Error: BIDS directory %s does not exist!", directory)
+        sys.exit(-1)
+    try:
+        with open(desc_path, encoding="utf-8") as f:
+            return json.load(f)
+    except OSError:
+        _log.critical(
+            "Cannot find dataset_description.json file which is required in the BIDS spec"
+        )
+        sys.exit(-1)
+
+
+def _apply_dataset_description(
+    project: Project, collection: Collection, dataset: dict
+) -> None:
+    """Map ``dataset_description.json`` keys onto project + collection.
+
+    Keys present in :data:`BIDS_Constants.dataset_description` are
+    forwarded to the appropriate predicate; ``Name`` lands on the
+    project, list-valued keys (Authors, ReferencesAndLinks, ...) get
+    one triple per entry on the collection, everything else lands on
+    the collection as a single triple.  Unknown keys are silently
+    dropped (legacy parity).
+    """
+    for key, value in dataset.items():
+        if key not in BIDS_Constants.dataset_description:
+            continue
+        predicate = BIDS_Constants.dataset_description[key]
+        if key == "Name":
+            # Project name: join list values (preserves legacy quirk
+            # where Name was sometimes a list).
+            name = "".join(value) if isinstance(value, list) else value
+            project.graph.add((project.identifier, predicate, _lit(name)))
+        elif isinstance(value, list):
+            for entry in value:
+                collection.graph.add((collection.identifier, predicate, _lit(entry)))
+        else:
+            collection.graph.add((collection.identifier, predicate, _lit(value)))
+
+
+def _lit(value):
+    """Coerce *value* into an rdflib Literal."""
+    from rdflib import Literal
+
+    return Literal(value)
 
 
 # ---------------------------------------------------------------------------
@@ -131,72 +274,57 @@ def _suffix_from_filename(filename: str) -> Optional[str]:
 
 
 def bidsmri2project(
-    bids_dir: Union[str, "os.PathLike[str]"],
-    output_path: Optional[Union[str, "os.PathLike[str]"]] = None,
-    *,
+    directory,
+    args=None,
+    subject_filter: Optional[str] = None,
     project_uuid: Optional[str] = None,
     dataset_uuid: Optional[str] = None,
-) -> Project:
+) -> Tuple[Project, Collection, Graph, List[Graph]]:
+    """Build a NIDM Project + BIDS Dataset collection from a BIDS directory.
+
+    Returns ``(project, collection, cde, cde_pheno)``:
+
+      * ``project`` -- the Project wrapper.
+      * ``collection`` -- the BIDS Dataset Collection wrapper.
+      * ``cde`` -- an rdflib.Graph of common data elements for any
+        participants.tsv variables that were mapped (Phase B+).
+      * ``cde_pheno`` -- list of additional CDE graphs produced by
+        :func:`map_variables_to_terms` calls (Phase D+).
+
+    When ``project_uuid`` / ``dataset_uuid`` are supplied, the new
+    Project / Collection reuse them rather than generating fresh
+    UUIDs; this is how ``--per_subject`` mode keeps all per-subject
+    files referencing the same nidm:Project / bids:Dataset.
+
+    Phases A through D incrementally fill in the body; in this
+    revision (Phase A) the subject walk uses the slim implementation
+    while the harness and dataset_description handling are full.
     """
-    Convert a BIDS dataset directory into a NIDM-Experiment graph.
+    directory = str(directory)
+    cde = Graph()
+    cde_pheno: List[Graph] = []
 
-    Parameters
-    ----------
-    bids_dir
-        Path to the BIDS dataset root.
-    output_path
-        Optional path to write the resulting turtle file to.  If
-        ``None``, the graph is built in-memory only and returned via
-        ``Project.graph``.
-    project_uuid, dataset_uuid
-        Optional pre-generated UUIDs for the Project activity and BIDS
-        Dataset collection (for repeatable runs / cross-file
-        consistency).
+    dataset = _load_dataset_description(directory)
 
-    Returns
-    -------
-    Project
-        The constructed ``nidm.linkml.experiment.Project`` wrapper.
-        Use ``project.graph`` to access the underlying rdflib.Graph.
-    """
-    bids_root = Path(bids_dir).resolve()
-    if not bids_root.is_dir():
-        raise FileNotFoundError(f"BIDS directory does not exist: {bids_root}")
-
-    # ------------------------------------------------------------------
-    # Project + Collection from dataset_description.json
-    # ------------------------------------------------------------------
-    desc_path = bids_root / "dataset_description.json"
-    description: dict = {}
-    if desc_path.is_file():
-        try:
-            description = json.loads(desc_path.read_text())
-        except json.JSONDecodeError as exc:
-            _log.warning("malformed dataset_description.json (%s); ignoring", exc)
-
-    project = Project(
-        uuid=project_uuid,
-        title=description.get("Name"),
-        license=description.get("License"),
-        author=", ".join(description.get("Authors", [])) or None,
-        version=description.get("DatasetDOI") or description.get("HEDVersion"),
+    project = Project(uuid=project_uuid) if project_uuid is not None else Project()
+    collection = Collection(
+        project, uuid=dataset_uuid, extra_types=[BIDS.Dataset]
     )
 
-    Collection(
-        project,
-        uuid=dataset_uuid,
-        extra_types=[BIDS.Dataset],
-        bids_version=description.get("BIDSVersion"),
-        license=description.get("License"),
-    )
+    _apply_dataset_description(project, collection, dataset)
 
     # ------------------------------------------------------------------
-    # Per-subject Person + Session, then per-scan Acquisition + Object
+    # Slim per-subject walk -- replaced in phase B/C.
     # ------------------------------------------------------------------
+    bids_root = Path(directory).resolve()
     for subject_dir in sorted(bids_root.glob("sub-*")):
         if not subject_dir.is_dir():
             continue
         subject_id = subject_dir.name  # "sub-01"
+        # parse the bare id without "sub-" prefix for filter matching
+        bare_id = subject_id.removeprefix("sub-") if hasattr(str, "removeprefix") else subject_id[4:]
+        if subject_filter is not None and bare_id != subject_filter:
+            continue
 
         person = Person(project, subject_id=subject_id)
         session = Session(project)
@@ -215,74 +343,26 @@ def bidsmri2project(
                     continue
                 suffix = _suffix_from_filename(scan_path.name)
                 if suffix is None:
-                    continue  # not a recognized scan file
+                    continue
 
                 if modality == "PET":
                     acq = PETAcquisition(session)
-                    # Construction registers the object on the acquisition.
                     PETObject(
                         acq,
                         filename=_bids_filename(scan_path, bids_root),
                     )
-                else:  # MR (anat / func / dwi / asl / fmap)
+                else:
                     acq = MRAcquisition(session)
                     contrast = _SUFFIX_TO_CONTRAST.get(suffix)
-                    # Construction registers the object on the acquisition.
                     MRObject(
                         acq,
                         filename=_bids_filename(scan_path, bids_root),
                         image_contrast_type=contrast,
                         image_usage_type=image_usage,
                     )
-
-                # Link the participant to this acquisition.
                 acq.add_qualified_association(person, role=SIO.Subject)
 
-    # ------------------------------------------------------------------
-    # Export provenance: who made this file, with what tool, when.
-    # ------------------------------------------------------------------
-    agent = SoftwareAgent(
-        project,
-        name="PyNIDM",
-        software_version=_pynidm_version(),
-        command=f"python -m {__name__}",
-        runtime_platform=_runtime_platform(),
-    )
-    ExportActivity(
-        project,
-        label="Create NIDM RDF from BIDS dataset (slim)",
-        output_format="turtle",
-        started_at_time=datetime.datetime.now(datetime.timezone.utc),
-        was_associated_with=agent,
-        used=str(project.identifier),
-    )
-
-    if output_path is not None:
-        project.write(output_path)
-
-    return project
-
-
-# ---------------------------------------------------------------------------
-# Lightweight helpers
-# ---------------------------------------------------------------------------
-
-
-def _pynidm_version() -> str:
-    """Return the installed PyNIDM version, or 'unknown'."""
-    try:
-        from nidm import __version__ as v  # type: ignore[attr-defined]
-
-        return str(v)
-    except Exception:  # pragma: no cover -- defensive
-        return "unknown"
-
-
-def _runtime_platform() -> str:
-    """Return e.g. 'Python 3.9.23' for the SoftwareAgent runtime_platform."""
-    import platform
-
-    return f"Python {platform.python_version()}"
+    return project, collection, cde, cde_pheno
 
 
 # ---------------------------------------------------------------------------
@@ -290,41 +370,185 @@ def _runtime_platform() -> str:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: Optional[list] = None) -> int:
+def _build_arg_parser() -> ArgumentParser:
     parser = ArgumentParser(
         description=(
-            "Slim BIDS -> NIDM-Experiment converter (LinkML wrapper layer).  "
-            "See the module docstring for the feature set vs the legacy tool."
-        )
+            "Represent a BIDS dataset as a NIDM RDF document.  When -no_concepts "
+            "is not set, the user is interactively prompted to map participants.tsv "
+            "variables to concepts (requires INTERLEX_API_KEY env var)."
+        ),
+        formatter_class=RawTextHelpFormatter,
     )
     parser.add_argument(
-        "--bids_dir", required=True, help="Path to the BIDS dataset root."
+        "-d", dest="directory", required=True,
+        help="Full path to BIDS dataset directory",
     )
     parser.add_argument(
-        "--output_file",
-        required=True,
-        help="Output turtle file path.",
+        "-jsonld", "--jsonld", action="store_true",
+        help="If flag set, output is json-ld not TURTLE",
     )
-    parser.add_argument("--project_uuid", default=None)
-    parser.add_argument("--dataset_uuid", default=None)
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging.")
+    parser.add_argument(
+        "-bidsignore", "--bidsignore", action="store_true", default=False,
+        help="If flag set, tool will add NIDM-related files to .bidsignore",
+    )
+    parser.add_argument(
+        "-no_concepts", "--no_concepts", action="store_true", default=False,
+        help="If flag set, tool will not do concept mapping",
+    )
+    mapvars = parser.add_argument_group("map variables to terms arguments")
+    mapvars.add_argument(
+        "-json_map", "--json_map", dest="json_map", required=False, default=False,
+        help="Optional full path to user-supplied JSON file containing variable-term mappings.",
+    )
+    parser.add_argument(
+        "-log", "--log", dest="logfile", required=False, default=None,
+        help=(
+            "Full path to directory to save log file.  Log file is "
+            "bidsmri2nidm_[basename(directory)].log"
+        ),
+    )
+    parser.add_argument(
+        "-o", dest="outputfile", required=False, default="nidm.ttl",
+        help="Output turtle filename (or directory in --per_subject mode).",
+    )
+    parser.add_argument(
+        "-per_subject", "--per_subject", action="store_true", default=False,
+        help=(
+            "Emit one NIDM turtle file per subject, named sub-<id>_nidm.ttl.  "
+            "By default they go in the BIDS directory; use -o to specify a "
+            "different output directory."
+        ),
+    )
+    return parser
+
+
+def _resolve_per_subject_output_dir(args) -> str:
+    """When --per_subject is set, the -o flag is interpreted as an output
+    directory; falls back to the BIDS directory if -o wasn't supplied.
+    Creates the directory when missing.  Matches legacy behavior."""
+    if args.outputfile == "nidm.ttl":
+        return args.directory
+    out_dir = args.outputfile
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def _list_subjects(directory) -> List[str]:
+    """Return BIDS subject IDs (without the ``sub-`` prefix), sorted."""
+    bids_root = Path(directory).resolve()
+    subjects = []
+    for sub_dir in sorted(bids_root.glob("sub-*")):
+        if not sub_dir.is_dir():
+            continue
+        name = sub_dir.name
+        if name.startswith("sub-."):
+            continue
+        subjects.append(name[len("sub-"):])
+    return subjects
+
+
+def main(argv: Optional[list] = None) -> int:
+    parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    directory = args.directory
 
-    if args.verbose:
-        logging.basicConfig(level=logging.INFO)
+    if args.logfile is not None:
+        logging.basicConfig(
+            filename=join(
+                args.logfile,
+                "bidsmri2nidm_" + args.outputfile.split("/")[-2] + ".log",
+            ),
+            level=logging.DEBUG,
+        )
+        _log.info("bidsmri2nidm %s", args)
 
-    bidsmri2project(
-        bids_dir=args.bids_dir,
-        output_path=args.output_file,
-        project_uuid=args.project_uuid,
-        dataset_uuid=args.dataset_uuid,
-    )
-    print(f"Wrote NIDM graph to {args.output_file}")
+    if args.per_subject:
+        out_dir = _resolve_per_subject_output_dir(args)
+        # .bidsignore paths are only meaningful when output lands in the BIDS tree
+        abs_bids = os.path.abspath(directory)
+        abs_out = os.path.abspath(out_dir)
+        out_inside_bids = abs_out == abs_bids or abs_out.startswith(abs_bids + os.sep)
+        if args.bidsignore and not out_inside_bids:
+            _log.warning(
+                "Output directory %s is outside BIDS directory %s; per-subject "
+                "files will not be added to .bidsignore",
+                out_dir, directory,
+            )
+
+        # Share project + dataset UUIDs across per-subject runs.
+        from ..core import getUUID
+        shared_project_uuid = getUUID()
+        shared_dataset_uuid = getUUID()
+
+        for subj in _list_subjects(directory):
+            _log.info("Building NIDM file for subject %s", subj)
+            project, collection, cde, cde_pheno = bidsmri2project(
+                directory, args,
+                subject_filter=subj,
+                project_uuid=shared_project_uuid,
+                dataset_uuid=shared_dataset_uuid,
+            )
+            outputfile = os.path.join(out_dir, f"sub-{subj}_nidm.ttl")
+            bidsignore_name = (
+                os.path.relpath(os.path.abspath(outputfile), abs_bids)
+                if (args.bidsignore and out_inside_bids)
+                else None
+            )
+            _write_nidm_graph(
+                project=project, collection=collection, cde=cde, cde_pheno=cde_pheno,
+                outputfile=outputfile,
+                bidsignore=bidsignore_name is not None,
+                directory=directory, bidsignore_name=bidsignore_name,
+            )
+    else:
+        project, collection, cde, cde_pheno = bidsmri2project(directory, args)
+        outputfile = (
+            os.path.join(directory, args.outputfile)
+            if args.outputfile == "nidm.ttl"
+            else args.outputfile
+        )
+        _write_nidm_graph(
+            project=project, collection=collection, cde=cde, cde_pheno=cde_pheno,
+            outputfile=outputfile,
+            bidsignore=args.bidsignore,
+            directory=directory, bidsignore_name=args.outputfile,
+        )
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Small internal helpers (used by the slim subject walk; will move to
+# Phase C's addimagingsessions when that lands)
+# ---------------------------------------------------------------------------
+
+
+def _bids_filename(scan_path: Path, bids_root: Path) -> str:
+    """Return a ``bids::``-prefixed relative path string."""
+    rel = scan_path.resolve().relative_to(bids_root.resolve()).as_posix()
+    return f"bids::{rel}"
+
+
+def _suffix_from_filename(filename: str) -> Optional[str]:
+    """Pull the BIDS suffix (e.g. 'T1w') out of a filename, or None."""
+    m = _SCAN_FILE_RE.match(filename)
+    return m.group("suffix") if m else None
+
+
+def _pynidm_version() -> str:
+    """Return the installed PyNIDM version, or 'unknown'."""
+    try:
+        from nidm import __version__ as v  # type: ignore[attr-defined]
+        return str(v)
+    except Exception:
+        return "unknown"
+
+
+def _runtime_platform() -> str:
+    """Return e.g. 'Python 3.9.23' for the SoftwareAgent runtime_platform."""
+    import platform
+    return f"Python {platform.python_version()}"
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-__all__ = ["bidsmri2project", "main", "__version__"]
