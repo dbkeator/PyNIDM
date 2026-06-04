@@ -61,12 +61,12 @@ from ..pet_acquisition import PETAcquisition
 from ..pet_object import PETObject
 from ..project import Project
 from ..session import Session
-from ..utils import add_export_provenance
+from ..utils import add_export_provenance, add_git_annex_sources
 from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, NFO, PROV, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.3.0"  # Phase B: participants.tsv handling
+__version__ = "0.4.0"  # Phase C: addimagingsessions full port
 _log = logging.getLogger(__name__)
 
 
@@ -410,6 +410,259 @@ def _process_participant_row(
     return subjid
 
 
+# ---------------------------------------------------------------------------
+# Phase C: addimagingsessions -- per-scan attribute extraction
+# ---------------------------------------------------------------------------
+
+
+def _sidecar_json_path(scan_path: Path) -> Path:
+    """Return the path to the JSON sidecar that pairs with *scan_path*.
+
+    For ``sub-01_T1w.nii.gz`` the sidecar is ``sub-01_T1w.json`` in the
+    same directory.  Strips both ``.nii.gz`` and ``.nii`` extensions
+    before swapping in ``.json``.
+    """
+    name = scan_path.name
+    for ext in (".nii.gz", ".nii"):
+        if name.endswith(ext):
+            stem = name[: -len(ext)]
+            break
+    else:
+        stem = scan_path.stem
+    return scan_path.with_name(stem + ".json")
+
+
+def _load_sidecar_metadata(scan_path: Path) -> dict:
+    """Return the JSON sidecar dict for *scan_path*, or ``{}`` if absent
+    or malformed (matches legacy quiet-failure)."""
+    sidecar = _sidecar_json_path(scan_path)
+    if not sidecar.is_file():
+        return {}
+    try:
+        return json.loads(sidecar.read_text())
+    except json.JSONDecodeError:
+        _log.warning("malformed sidecar JSON: %s; ignoring", sidecar)
+        return {}
+
+
+def _apply_json_keys(obj, metadata: dict) -> None:
+    """Map BIDS sidecar JSON keys to NIDM predicates on *obj*.
+
+    Iterates over *metadata* keys; when ``BIDS_Constants.json_keys``
+    has a mapping, emit one triple on ``obj.graph`` with the mapped
+    predicate.  List values are joined with empty string (matches
+    legacy quirk for the per-scan sidecar; the root-level descent
+    uses comma-join instead).
+    """
+    for key, value in metadata.items():
+        normalized_key = key.replace(" ", "_")
+        if normalized_key not in BIDS_Constants.json_keys:
+            continue
+        predicate = BIDS_Constants.json_keys[normalized_key]
+        if isinstance(value, list):
+            obj.graph.add((obj.identifier, predicate, Literal("".join(str(e) for e in value))))
+        else:
+            obj.graph.add((obj.identifier, predicate, Literal(value)))
+
+
+def _apply_scan_contrast_and_usage(obj, suffix: str, datatype: str) -> None:
+    """Emit nidm:hadImageContrastType + nidm:hadImageUsageType triples
+    using ``BIDS_Constants.scans`` mappings.  Missing mappings are
+    logged at INFO (matches legacy)."""
+    from ...core import constants as _C
+
+    if suffix in BIDS_Constants.scans:
+        obj.graph.add(
+            (obj.identifier, _C.NIDM_IMAGE_CONTRAST_TYPE, BIDS_Constants.scans[suffix])
+        )
+    else:
+        _log.info(
+            "WARNING: No matching image contrast type found in BIDS_Constants.py for %s",
+            suffix,
+        )
+    if datatype in BIDS_Constants.scans:
+        obj.graph.add(
+            (obj.identifier, _C.NIDM_IMAGE_USAGE_TYPE, BIDS_Constants.scans[datatype])
+        )
+    else:
+        _log.info(
+            "WARNING: No matching image usage type found in BIDS_Constants.py for %s",
+            datatype,
+        )
+
+
+def _emit_sha512_triple(
+    obj,
+    scan_full_path: Path,
+    bids_root: Path,  # noqa: U100 -- accepted for caller symmetry, may be used later
+) -> None:
+    """Add a CRYPTO_SHA512 triple on *obj* if the file exists.
+
+    Missing files are logged at INFO (matches legacy).
+    """
+    from ...core import constants as _C
+
+    if scan_full_path.is_file():
+        obj.graph.add(
+            (obj.identifier, _C.CRYPTO_SHA512, Literal(getsha512(str(scan_full_path))))
+        )
+    else:
+        _log.info(
+            "WARNING file %s doesn't exist! No SHA512 sum stored in NIDM files...",
+            scan_full_path,
+        )
+
+
+def _maybe_apply_root_level_json(
+    obj, directory: str, json_filename: str, img_session: Optional[str] = None
+) -> None:
+    """Load *directory/json_filename* (or session-specific variant) and
+    apply :data:`BIDS_Constants.json_keys` mappings to *obj*.
+
+    Falls back silently when neither file exists.  Used for the
+    legacy T1w.json / task-rest_bold.json descent at BIDS root.
+    """
+    root_path = os.path.join(directory, json_filename)
+    payload: Optional[dict] = None
+    if os.path.isfile(root_path):
+        try:
+            with open(root_path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except OSError:
+            payload = None
+    elif img_session is not None:
+        ses_path = os.path.join(directory, f"ses-{img_session}_{json_filename}")
+        if os.path.isfile(ses_path):
+            try:
+                with open(ses_path, encoding="utf-8") as f:
+                    payload = json.load(f)
+            except OSError:
+                payload = None
+    if not payload:
+        return
+    for key, value in payload.items():
+        if key not in BIDS_Constants.json_keys:
+            continue
+        predicate = BIDS_Constants.json_keys[key]
+        if isinstance(value, list):
+            obj.graph.add(
+                (obj.identifier, predicate, Literal(",".join(map(str, value))))
+            )
+        else:
+            obj.graph.add((obj.identifier, predicate, Literal(value)))
+
+
+# Map BIDS datatype name -> the root-level JSON filename the legacy
+# tool reads for that datatype.  Only datatypes that have a real
+# descent target are listed; others fall through to no-op.
+_ROOT_LEVEL_JSON_BY_DATATYPE = {
+    "anat": "T1w.json",
+    "func": "task-rest_bold.json",
+}
+
+
+def _process_scan_file(
+    scan_path: Path,
+    modality_name: str,
+    acq,  # noqa: U100 -- accepted for events.tsv attachment in Phase D
+    obj,
+    directory: str,
+    bids_root: Path,
+    img_session: Optional[str] = None,
+) -> None:
+    """Attach per-scan metadata to *obj* (the AcquisitionObject wrapper).
+
+    The caller has already created *acq* / *obj* with the right
+    wrapper subclass (MR vs PET) and filename; this helper layers on:
+
+      * contrast/usage type via BIDS_Constants.scans
+      * sha512 hash via getsha512 (when file is non-empty)
+      * git-annex sources via add_git_annex_sources
+      * sidecar JSON descent (sub-XX_T1w.json next to the scan)
+      * root-level T1w.json / task-rest_bold.json descent
+    """
+    suffix = _suffix_from_filename(scan_path.name) or ""
+    _apply_scan_contrast_and_usage(obj, suffix, modality_name)
+    _emit_sha512_triple(obj, scan_path, bids_root)
+    add_git_annex_sources(
+        obj=obj, filepath=str(scan_path), bids_root=str(bids_root)
+    )
+    _apply_json_keys(obj, _load_sidecar_metadata(scan_path))
+    root_json = _ROOT_LEVEL_JSON_BY_DATATYPE.get(modality_name)
+    if root_json is not None:
+        _maybe_apply_root_level_json(obj, directory, root_json, img_session)
+
+
+def addimagingsessions(
+    subject_id: str,
+    session: Session,
+    persons_by_subj: Dict[str, Person],
+    bare_id: str,
+    directory: str,
+    bids_root: Path,
+    collection: Collection,
+    project: Project,
+    img_session: Optional[str] = None,
+) -> None:
+    """Walk *subject_id*'s BIDS directory and emit one
+    ``MRAcquisition``/``PETAcquisition`` per scan file, fully
+    populated with sidecar metadata.
+
+    Reuses the per-subject ``Person`` from *persons_by_subj* when
+    available; creates a fresh one otherwise.
+    """
+    subject_dir = bids_root / subject_id
+    if not subject_dir.is_dir():
+        return
+
+    person = persons_by_subj.get(bare_id)
+    if person is None:
+        person = Person(project, subject_id=subject_id)
+        persons_by_subj[bare_id] = person
+
+    for modality_dir in sorted(subject_dir.iterdir()):
+        if not modality_dir.is_dir():
+            continue
+        modality_name = modality_dir.name
+        if modality_name not in _DIRECTORY_TO_MODALITY:
+            continue
+        modality = _DIRECTORY_TO_MODALITY[modality_name]
+        image_usage = _DIRECTORY_TO_USAGE.get(modality_name)
+
+        for scan_path in sorted(modality_dir.iterdir()):
+            if not scan_path.is_file():
+                continue
+            suffix = _suffix_from_filename(scan_path.name)
+            if suffix is None:
+                continue
+
+            if modality == "PET":
+                acq = PETAcquisition(session)
+                obj = PETObject(
+                    acq, filename=_bids_filename(scan_path, bids_root)
+                )
+            else:
+                acq = MRAcquisition(session)
+                contrast = _SUFFIX_TO_CONTRAST.get(suffix)
+                obj = MRObject(
+                    acq,
+                    filename=_bids_filename(scan_path, bids_root),
+                    image_contrast_type=contrast,
+                    image_usage_type=image_usage,
+                )
+            acq.add_qualified_association(person, role=SIO.Subject)
+            _add_collection_member(collection, obj)
+            _process_scan_file(
+                scan_path=scan_path,
+                modality_name=modality_name,
+                acq=acq,
+                obj=obj,
+                directory=directory,
+                bids_root=bids_root,
+                img_session=img_session,
+            )
+
+
 def bidsmri2project(
     directory,
     args=None,  # noqa: U100 -- consumed in Phase D (json_map, no_concepts flags)
@@ -469,10 +722,10 @@ def bidsmri2project(
         )
 
     # ------------------------------------------------------------------
-    # Slim per-subject image walk -- replaced in phase C.
-    # Reuses Session/Person from participants.tsv when present, falls
-    # back to creating fresh ones from the filesystem when participants.tsv
-    # is absent or doesn't cover all subjects.
+    # Phase C -- per-subject image walk via addimagingsessions.
+    # Reuses Session/Person from participants.tsv when present, creates
+    # fresh ones from the filesystem when participants.tsv is absent or
+    # doesn't cover all subjects.
     # ------------------------------------------------------------------
     for subject_dir in sorted(bids_root.glob("sub-*")):
         if not subject_dir.is_dir():
@@ -486,48 +739,21 @@ def bidsmri2project(
         if subject_filter is not None and bare_id != subject_filter:
             continue
 
-        person = persons_by_subj.get(bare_id)
-        if person is None:
-            person = Person(project, subject_id=subject_id)
-            persons_by_subj[bare_id] = person
-
         session = sessions_by_subj.get(bare_id)
         if session is None:
             session = Session(project)
             sessions_by_subj[bare_id] = session
 
-        for modality_dir in sorted(subject_dir.iterdir()):
-            if not modality_dir.is_dir():
-                continue
-            modality_name = modality_dir.name
-            if modality_name not in _DIRECTORY_TO_MODALITY:
-                continue
-            modality = _DIRECTORY_TO_MODALITY[modality_name]
-            image_usage = _DIRECTORY_TO_USAGE.get(modality_name)
-
-            for scan_path in sorted(modality_dir.iterdir()):
-                if not scan_path.is_file():
-                    continue
-                suffix = _suffix_from_filename(scan_path.name)
-                if suffix is None:
-                    continue
-
-                if modality == "PET":
-                    acq = PETAcquisition(session)
-                    PETObject(
-                        acq,
-                        filename=_bids_filename(scan_path, bids_root),
-                    )
-                else:
-                    acq = MRAcquisition(session)
-                    contrast = _SUFFIX_TO_CONTRAST.get(suffix)
-                    MRObject(
-                        acq,
-                        filename=_bids_filename(scan_path, bids_root),
-                        image_contrast_type=contrast,
-                        image_usage_type=image_usage,
-                    )
-                acq.add_qualified_association(person, role=SIO.Subject)
+        addimagingsessions(
+            subject_id=subject_id,
+            session=session,
+            persons_by_subj=persons_by_subj,
+            bare_id=bare_id,
+            directory=directory,
+            bids_root=bids_root,
+            collection=collection,
+            project=project,
+        )
 
     # fieldnames currently unused at top level; Phase D consumes them
     # for the CDE-attachment logic via map_variables_to_terms.

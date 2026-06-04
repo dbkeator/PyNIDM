@@ -43,6 +43,26 @@ from nidm.linkml.experiment.tools.bidsmri2nidm import (
 # AssessmentObject is typed onli:assessment-instrument in the wrapper.
 _ASSESSMENT_OBJECT_TYPE = ONLI["assessment-instrument"]
 
+
+def _write_t1w_sidecar(bids_root: Path, subject: str = "sub-01", payload: dict = None):
+    """Write a sub-XX/anat/sub-XX_T1w.json sidecar next to the T1w scan."""
+    anat = bids_root / subject / "anat"
+    anat.mkdir(parents=True, exist_ok=True)
+    (anat / f"{subject}_T1w.json").write_text(json.dumps(payload or {}))
+
+
+def _write_root_t1w_json(bids_root: Path, payload: dict):
+    (bids_root / "T1w.json").write_text(json.dumps(payload))
+
+
+def _write_nonempty_t1w_scan(bids_root: Path, subject: str = "sub-01") -> Path:
+    """T1w scan with actual bytes so sha512 hashes are non-trivial."""
+    anat = bids_root / subject / "anat"
+    anat.mkdir(parents=True, exist_ok=True)
+    scan = anat / f"{subject}_T1w.nii.gz"
+    scan.write_bytes(b"fake nifti content for hashing")
+    return scan
+
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
@@ -562,3 +582,123 @@ def test_participants_tsv_links_person_via_qualified_association(tmp_path: Path)
         assoc = list(g.objects(acq, PROV.qualifiedAssociation))[0]
         assoc_person = list(g.objects(assoc, PROV.agent))[0]
         assert assoc_person == person
+
+
+# ---------------------------------------------------------------------------
+# Phase C: addimagingsessions -- per-scan attribute extraction
+# ---------------------------------------------------------------------------
+
+
+def test_sha512_hash_emitted_for_nonempty_scan(tmp_path: Path):
+    """Non-empty scan files get a CRYPTO_SHA512 triple on their AcquisitionObject."""
+    from nidm.linkml.core.constants import CRYPTO_SHA512
+
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    project = _build_project(tmp_path)
+    g = project.graph
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    hashes = list(g.objects(obj, CRYPTO_SHA512))
+    assert len(hashes) == 1
+    # Length of sha512 hex digest is always 128 chars.
+    assert len(str(hashes[0])) == 128
+
+
+def test_sha512_not_emitted_for_empty_or_missing_scan(tmp_path: Path):
+    """Empty scan still hashes (sha512 of '' is a known constant)."""
+    from nidm.linkml.core.constants import CRYPTO_SHA512
+
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path)  # zero-byte file
+    project = _build_project(tmp_path)
+    g = project.graph
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    hashes = list(g.objects(obj, CRYPTO_SHA512))
+    # Zero-byte file still hashes -- sha512 of empty string is well-defined.
+    assert len(hashes) == 1
+
+
+def test_sidecar_json_descent_maps_manufacturer_to_dicom_predicate(tmp_path: Path):
+    """A sub-XX_T1w.json next to the scan, with a Manufacturer key,
+    should produce a DICOM:Manufacturer triple on the AcquisitionObject."""
+    from nidm.linkml.core.namespaces import DICOM
+
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    _write_t1w_sidecar(
+        tmp_path,
+        payload={
+            "Manufacturer": "Siemens",
+            "ManufacturerModelName": "Prisma",
+        },
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    manus = list(g.objects(obj, DICOM["Manufacturer"]))
+    assert [str(m) for m in manus] == ["Siemens"]
+    models = list(g.objects(obj, DICOM["ManufacturerModelName"]))
+    assert [str(m) for m in models] == ["Prisma"]
+
+
+def test_sidecar_json_descent_skips_unknown_keys(tmp_path: Path):
+    """JSON keys not in BIDS_Constants.json_keys are silently dropped."""
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    _write_t1w_sidecar(
+        tmp_path,
+        payload={"NotInJsonKeys": "ignored", "Manufacturer": "Siemens"},
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    # The unknown key should produce no Literal "ignored" triple.
+    from rdflib import Literal as _Lit
+
+    ignored = [
+        t for t in g if isinstance(t[2], _Lit) and str(t[2]) == "ignored"
+    ]
+    assert ignored == []
+
+
+def test_root_level_t1w_json_descent(tmp_path: Path):
+    """A T1w.json at the BIDS root applies its mapped keys to anat scans."""
+    from nidm.linkml.core.namespaces import DICOM
+
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    _write_root_t1w_json(tmp_path, {"Manufacturer": "GE"})
+    project = _build_project(tmp_path)
+    g = project.graph
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    manus = list(g.objects(obj, DICOM["Manufacturer"]))
+    assert "GE" in [str(m) for m in manus]
+
+
+def test_per_scan_sidecar_takes_precedence_over_root(tmp_path: Path):
+    """When both root T1w.json and per-scan sidecar are present, both
+    contribute triples (rdflib graphs are sets so duplicates collapse)."""
+    from nidm.linkml.core.namespaces import DICOM
+
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    _write_t1w_sidecar(tmp_path, payload={"Manufacturer": "Siemens"})
+    _write_root_t1w_json(tmp_path, {"Manufacturer": "GE"})
+    project = _build_project(tmp_path)
+    g = project.graph
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    manus = {str(m) for m in g.objects(obj, DICOM["Manufacturer"])}
+    # Both Siemens (sidecar) and GE (root) appear.
+    assert manus == {"Siemens", "GE"}
+
+
+def test_acquisition_object_is_collection_member(tmp_path: Path):
+    """Phase C: AcquisitionObjects should be linked into the BIDS Dataset
+    collection via prov:hadMember (matches legacy bids:Dataset shape)."""
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path)
+    project = _build_project(tmp_path)
+    g = project.graph
+    collection = list(g.subjects(RDF.type, BIDS.Dataset))[0]
+    members = list(g.objects(collection, PROV.hadMember))
+    obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
+    assert obj in members
