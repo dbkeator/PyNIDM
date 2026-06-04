@@ -38,6 +38,7 @@ still the on-disk default.
 """
 from __future__ import annotations
 from argparse import ArgumentParser, RawTextHelpFormatter
+import csv
 import hashlib
 from io import StringIO
 import json
@@ -47,8 +48,11 @@ from os.path import isfile, join
 from pathlib import Path
 import re
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from rdflib import Graph
+from ..acquisition_object import AcquisitionObject
+from ..assessment_acquisition import AssessmentAcquisition
+from ..assessment_object import AssessmentObject
 from ..collection import Collection
 from ..mr_acquisition import MRAcquisition
 from ..mr_object import MRObject
@@ -62,7 +66,7 @@ from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.2.0"  # Phase A of the full port; bumps every phase
+__version__ = "0.3.0"  # Phase B: participants.tsv handling
 _log = logging.getLogger(__name__)
 
 
@@ -273,9 +277,160 @@ def _lit(value):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# participants.tsv handling (Phase B)
+# ---------------------------------------------------------------------------
+
+
+def _parse_subjid(participant_id: str) -> str:
+    """Strip the ``sub-`` prefix when present (e.g. 'sub-01' -> '01').
+
+    Tolerates both ``sub-XXXX`` and bare ``XXXX`` forms (matches the
+    BIDS-files-in-the-wild quirk the legacy code handled).
+    """
+    parts = participant_id.split("-")
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def _read_participants_tsv(directory) -> Tuple[List[str], List[dict]]:
+    """Read ``directory/participants.tsv`` and return (fieldnames, rows).
+
+    Returns ``([], [])`` if the file is missing.  Fieldnames are
+    stripped of surrounding whitespace (some TSVs in the wild have
+    trailing spaces in headers).  Detects encoding via chardet.
+    """
+    path = os.path.join(directory, "participants.tsv")
+    if not os.path.isfile(path):
+        return [], []
+    encoding = check_encoding(path)
+    with open(path, encoding=encoding) as csvfile:
+        reader = csv.DictReader(csvfile, delimiter="\t")
+        fieldnames = [f.strip() for f in (reader.fieldnames or [])]
+        reader.fieldnames = fieldnames
+        rows = list(reader)
+    return fieldnames, rows
+
+
+def _maybe_attach_participants_sidecar(
+    acq: AssessmentAcquisition,
+    acq_entity: AssessmentObject,
+    collection: Collection,
+    directory: str,
+    bids_root: Path,
+) -> Optional[AcquisitionObject]:
+    """If ``directory/participants.json`` exists, create a sidecar
+    AcquisitionObject typed ``bids:sidecar_file`` and link it via
+    ``prov:wasInfluencedBy`` from *acq_entity*.
+
+    Returns the sidecar wrapper (or None if no sidecar exists).
+    """
+    json_path = os.path.join(directory, "participants.json")
+    if not os.path.isfile(json_path):
+        return None
+    sidecar = AcquisitionObject(acquisition=acq)
+    # Add bids:sidecar_file type.
+    from rdflib import URIRef
+    sidecar.graph.add((sidecar.identifier, _RDF_TYPE, URIRef(BIDS["sidecar_file"])))
+    # Add filename triple via the NFO predicate.
+    from ...core.namespaces import NFO
+    from rdflib import Literal
+    sidecar.graph.add(
+        (
+            sidecar.identifier,
+            NFO.filename,
+            Literal(
+                getRelPathToBIDS(
+                    os.path.join(str(bids_root), "participants.json"),
+                    str(bids_root),
+                    bidsuri_format=True,
+                )
+            ),
+        )
+    )
+    # Link to the parent assessment entity.
+    from ...core.namespaces import PROV
+    acq_entity.graph.add((acq_entity.identifier, PROV.wasInfluencedBy, sidecar.identifier))
+    # Hadmember on the BIDS Dataset collection.
+    _add_collection_member(collection, sidecar)
+    return sidecar
+
+
+def _add_collection_member(collection: Collection, member) -> None:
+    """Emit a ``prov:hadMember`` triple linking *collection* to *member*."""
+    from ...core.namespaces import PROV
+    collection.graph.add(
+        (collection.identifier, PROV.hadMember, member.identifier)
+    )
+
+
+def _process_participant_row(
+    row: dict,
+    project: Project,
+    collection: Collection,
+    sessions_by_subj: Dict[str, Session],
+    persons_by_subj: Dict[str, Person],
+    directory: str,
+    bids_root: Path,
+    subject_filter: Optional[str] = None,
+) -> Optional[str]:
+    """Materialize the NIDM nodes for one participants.tsv row.
+
+    Creates a per-subject Session + AssessmentAcquisition + AssessmentObject
+    + Person and registers them in *sessions_by_subj* / *persons_by_subj*
+    so the imaging walk can reuse them.
+
+    Returns the bare subject id (e.g. ``'01'``) when the row was processed,
+    or ``None`` when skipped (subject_filter mismatch).
+    """
+    participant_id = row["participant_id"]
+    subjid = _parse_subjid(participant_id)
+    if subject_filter is not None and subjid != subject_filter:
+        return None
+
+    _log.info(subjid)
+    session = Session(project)
+    sessions_by_subj[subjid] = session
+
+    acq = AssessmentAcquisition(session=session)
+    acq_entity = AssessmentObject(acquisition=acq)
+    _add_collection_member(collection, acq_entity)
+
+    person = Person(project, subject_id=participant_id)
+    persons_by_subj[subjid] = person
+
+    # nfo:filename on the assessment entity -> bids::participants.tsv
+    from ...core.namespaces import NFO
+    from rdflib import Literal
+    acq_entity.graph.add(
+        (
+            acq_entity.identifier,
+            NFO.filename,
+            Literal(
+                getRelPathToBIDS(
+                    os.path.join(str(bids_root), "participants.tsv"),
+                    str(bids_root),
+                    bidsuri_format=True,
+                )
+            ),
+        )
+    )
+    acq.add_qualified_association(person, role=SIO.Subject)
+
+    # Optional sidecar (participants.json -> bids:sidecar_file)
+    _maybe_attach_participants_sidecar(
+        acq, acq_entity, collection, directory, bids_root
+    )
+    return subjid
+
+
+# RDF.type cached for the few inline triple emissions above.
+from rdflib import RDF as _RDF  # noqa: E402
+_RDF_TYPE = _RDF.type
+
+
 def bidsmri2project(
     directory,
-    args=None,  # noqa: U100 -- consumed in Phase B (json_map, no_concepts flags)
+    args=None,  # noqa: U100 -- consumed in Phase D (json_map, no_concepts flags)
     subject_filter: Optional[str] = None,
     project_uuid: Optional[str] = None,
     dataset_uuid: Optional[str] = None,
@@ -311,15 +466,36 @@ def bidsmri2project(
 
     _apply_dataset_description(project, collection, dataset)
 
-    # ------------------------------------------------------------------
-    # Slim per-subject walk -- replaced in phase B/C.
-    # ------------------------------------------------------------------
     bids_root = Path(directory).resolve()
+    sessions_by_subj: Dict[str, Session] = {}
+    persons_by_subj: Dict[str, Person] = {}
+
+    # ------------------------------------------------------------------
+    # Phase B -- participants.tsv -> Person / Session / AssessmentObject
+    # ------------------------------------------------------------------
+    fieldnames, rows = _read_participants_tsv(directory)
+    for row in rows:
+        _process_participant_row(
+            row=row,
+            project=project,
+            collection=collection,
+            sessions_by_subj=sessions_by_subj,
+            persons_by_subj=persons_by_subj,
+            directory=directory,
+            bids_root=bids_root,
+            subject_filter=subject_filter,
+        )
+
+    # ------------------------------------------------------------------
+    # Slim per-subject image walk -- replaced in phase C.
+    # Reuses Session/Person from participants.tsv when present, falls
+    # back to creating fresh ones from the filesystem when participants.tsv
+    # is absent or doesn't cover all subjects.
+    # ------------------------------------------------------------------
     for subject_dir in sorted(bids_root.glob("sub-*")):
         if not subject_dir.is_dir():
             continue
         subject_id = subject_dir.name  # "sub-01"
-        # parse the bare id without "sub-" prefix for filter matching
         bare_id = (
             subject_id.removeprefix("sub-")
             if hasattr(str, "removeprefix")
@@ -328,8 +504,15 @@ def bidsmri2project(
         if subject_filter is not None and bare_id != subject_filter:
             continue
 
-        person = Person(project, subject_id=subject_id)
-        session = Session(project)
+        person = persons_by_subj.get(bare_id)
+        if person is None:
+            person = Person(project, subject_id=subject_id)
+            persons_by_subj[bare_id] = person
+
+        session = sessions_by_subj.get(bare_id)
+        if session is None:
+            session = Session(project)
+            sessions_by_subj[bare_id] = session
 
         for modality_dir in sorted(subject_dir.iterdir()):
             if not modality_dir.is_dir():
@@ -363,6 +546,10 @@ def bidsmri2project(
                         image_usage_type=image_usage,
                     )
                 acq.add_qualified_association(person, role=SIO.Subject)
+
+    # fieldnames currently unused at top level; Phase D consumes them
+    # for the CDE-attachment logic via map_variables_to_terms.
+    del fieldnames
 
     return project, collection, cde, cde_pheno
 

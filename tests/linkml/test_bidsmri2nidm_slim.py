@@ -393,3 +393,179 @@ def test_cli_per_subject_writes_one_file_per_subject(tmp_path: Path):
     assert rc == 0
     assert (out_dir / "sub-01_nidm.ttl").exists()
     assert (out_dir / "sub-02_nidm.ttl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase B: participants.tsv -> Person / Session / AssessmentObject
+# ---------------------------------------------------------------------------
+
+
+def _write_participants_tsv(bids_root: Path, rows: list, header: str = None) -> Path:
+    """Write a participants.tsv file with *rows*.
+
+    Each row is a dict; the first row's keys define the header order
+    unless *header* is supplied explicitly.
+    """
+    target = bids_root / "participants.tsv"
+    if not rows:
+        target.write_text("participant_id\n")
+        return target
+    fields = (
+        [c.strip() for c in header.split("\t")] if header else list(rows[0].keys())
+    )
+    lines = [header if header else "\t".join(fields)]
+    for r in rows:
+        lines.append("\t".join(str(r.get(f.strip(), "")) for f in fields))
+    target.write_text("\n".join(lines) + "\n")
+    return target
+
+
+def _write_participants_json(bids_root: Path, payload: dict) -> Path:
+    target = bids_root / "participants.json"
+    target.write_text(json.dumps(payload))
+    return target
+
+
+def test_participants_tsv_emits_one_assessment_object_per_subject(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_t1w_scan(tmp_path, subject="sub-02")
+    _write_participants_tsv(
+        tmp_path,
+        [
+            {"participant_id": "sub-01", "age": "25", "sex": "F"},
+            {"participant_id": "sub-02", "age": "30", "sex": "M"},
+        ],
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    # One AssessmentObject per subject (vs slim, which had zero).
+    aos = list(g.subjects(RDF.type, NIDM.AssessmentObject))
+    assert len(aos) == 2
+
+
+def test_participants_tsv_strips_whitespace_in_headers(tmp_path: Path):
+    """A header like 'age_at_scan ' should still produce a valid row."""
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path,
+        [{"participant_id": "sub-01", "age_at_scan": "25"}],
+        header="participant_id\tage_at_scan ",
+    )
+    # No exception during build means the header stripping worked.
+    _build_project(tmp_path)
+
+
+def test_participants_tsv_assessment_filename_uses_bids_prefix(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    ao = list(g.subjects(RDF.type, NIDM.AssessmentObject))[0]
+    filenames = list(g.objects(ao, NFO.filename))
+    assert any("participants.tsv" in str(f) for f in filenames)
+    assert any(str(f).startswith("bids::") for f in filenames)
+
+
+def test_participants_json_sidecar_creates_typed_acquisition_object(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
+    )
+    _write_participants_json(
+        tmp_path,
+        {"age": {"Description": "Age at scan", "Units": "years"}},
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    # There should be a bids:sidecar_file object now.
+    sidecars = list(g.subjects(RDF.type, BIDS["sidecar_file"]))
+    assert len(sidecars) == 1
+    sidecar = sidecars[0]
+
+    # Its filename should be participants.json.
+    sidecar_filenames = list(g.objects(sidecar, NFO.filename))
+    assert any("participants.json" in str(f) for f in sidecar_filenames)
+
+    # Assessment objects should reference it via prov:wasInfluencedBy.
+    aos = list(g.subjects(RDF.type, NIDM.AssessmentObject))
+    influenced = list(g.objects(aos[0], PROV.wasInfluencedBy))
+    assert sidecar in influenced
+
+
+def test_participants_tsv_parses_bare_subject_ids(tmp_path: Path):
+    """participant_id values without 'sub-' prefix should still create
+    a valid Session/Person (legacy quirk)."""
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path,
+        [{"participant_id": "01"}],  # bare id, no sub- prefix
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    # We get an AssessmentAcquisition + AssessmentObject for the bare-id row.
+    aos = list(g.subjects(RDF.type, NIDM.AssessmentObject))
+    assert len(aos) == 1
+
+
+def test_participants_tsv_subject_filter_only_processes_matching_row(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_t1w_scan(tmp_path, subject="sub-02")
+    _write_participants_tsv(
+        tmp_path,
+        [
+            {"participant_id": "sub-01", "age": "25"},
+            {"participant_id": "sub-02", "age": "30"},
+        ],
+    )
+    # subject_filter='01' -> only one row, only one AssessmentObject.
+    project, _, _, _ = bidsmri2project(tmp_path, subject_filter="01")
+    aos = list(project.graph.subjects(RDF.type, NIDM.AssessmentObject))
+    assert len(aos) == 1
+
+
+def test_participants_tsv_session_is_reused_by_imaging_walk(tmp_path: Path):
+    """The imaging walk should reuse the Session created by
+    participants.tsv (so we end up with one Session per subject, not two)."""
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    sessions = list(g.subjects(RDF.type, NIDM.Session))
+    assert len(sessions) == 1
+
+
+def test_participants_tsv_links_person_via_qualified_association(tmp_path: Path):
+    """The Person from participants.tsv should be the same as the one
+    linked to the MR acquisition via qualifiedAssociation."""
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-01")
+    _write_participants_tsv(
+        tmp_path, [{"participant_id": "sub-01", "age": "25"}]
+    )
+    project = _build_project(tmp_path)
+    g = project.graph
+    persons = list(g.subjects(RDF.type, PROV.Person))
+    assert len(persons) == 1  # One Person, reused across assessment + imaging
+    person = persons[0]
+    # The MR acquisition's qualifiedAssociation -> the same Person.
+    mr_acqs = list(g.subjects(RDF.type, NIDM.Acquisition))
+    # Filter to just MRAcquisitions (which have hadAcquisitionModality).
+    mr_acqs = [
+        a for a in mr_acqs if list(g.objects(a, NIDM.hadAcquisitionModality))
+    ]
+    assert mr_acqs, "expected at least one MRAcquisition"
+    assoc = list(g.objects(mr_acqs[0], PROV.qualifiedAssociation))[0]
+    assoc_person = list(g.objects(assoc, PROV.agent))[0]
+    assert assoc_person == person
