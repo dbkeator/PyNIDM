@@ -61,12 +61,17 @@ from ..pet_acquisition import PETAcquisition
 from ..pet_object import PETObject
 from ..project import Project
 from ..session import Session
-from ..utils import add_export_provenance, add_git_annex_sources
+from ..utils import (
+    add_attributes_with_cde,
+    add_export_provenance,
+    add_git_annex_sources,
+    map_variables_to_terms,
+)
 from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, NFO, PROV, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.4.0"  # Phase C: addimagingsessions full port
+__version__ = "0.5.0"  # Phase D: CDE attachment for participants.tsv columns
 _log = logging.getLogger(__name__)
 
 
@@ -352,6 +357,69 @@ def _add_collection_member(collection: Collection, member) -> None:
     collection.graph.add((collection.identifier, PROV.hadMember, member.identifier))
 
 
+def _emit_bids_constant_cde_entry(cde: Graph, key: str) -> URIRef:
+    """Emit the fixed BIDS-Constant CDE pattern into *cde* for *key*.
+
+    For columns that have a stable mapping in
+    :data:`BIDS_Constants.participants` (e.g. ``participant_id``), the
+    legacy bidsmri2nidm builds a CDE entry on a per-dataset basis with
+    label / isAbout / source_variable / description / valueType /
+    rdfs:comment.  We preserve the same shape so downstream queries
+    against the CDE graph see identical triples.
+    """
+    from ...core import constants as _C
+
+    cde_id = URIRef(BIDS[key])
+    cde.add((cde_id, RDF.type, _C.NIDM["DataElement"]))
+    cde.add((cde_id, RDF.type, PROV.Entity))
+    target = BIDS_Constants.participants[key]
+    target_local = str(target).rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+    cde.add((cde_id, _C.RDFS["label"], Literal(target_local)))
+    cde.add((cde_id, _C.NIDM["isAbout"], URIRef(str(target))))
+    cde.add((cde_id, _C.NIDM["source_variable"], Literal(key)))
+    cde.add((cde_id, _C.NIDM["description"], Literal("participant/subject identifier")))
+    cde.add(
+        (
+            cde_id,
+            _C.RDFS["comment"],
+            Literal("BIDS participants_id variable fixed in specification"),
+        )
+    )
+    cde.add((cde_id, _C.RDFS["valueType"], URIRef(str(_C.XSD["string"]))))
+    return cde_id
+
+
+def _apply_participant_row_cdes(
+    row: dict,
+    acq_entity: AssessmentObject,
+    cde: Graph,
+) -> None:
+    """For each (key, value) in *row*, attach the appropriate CDE triple
+    to *acq_entity*.
+
+    * If *key* is in :data:`BIDS_Constants.participants` and isn't the
+      participant-id field, emit the fixed CDE entry (idempotent) and
+      attach a value triple ``acq_entity -> BIDS[key] -> Literal(value)``.
+    * Otherwise, delegate to :func:`add_attributes_with_cde` to look up
+      the user-mapped CDE URI in *cde* and attach the value triple.
+    """
+    from ...core import constants as _C
+
+    for key, value in row.items():
+        if not value:
+            continue
+        if key in BIDS_Constants.participants:
+            if BIDS_Constants.participants[key] == _C.NIDM_SUBJECTID:
+                continue
+            cde_id = _emit_bids_constant_cde_entry(cde, key)
+            acq_entity.graph.add((acq_entity.identifier, cde_id, Literal(value)))
+        else:
+            # user-mapped variable -- delegate to add_attributes_with_cde
+            add_attributes_with_cde(
+                obj=acq_entity, cde=cde, row_variable=key, value=value
+            )
+
+
 def _process_participant_row(
     row: dict,
     project: Project,
@@ -360,6 +428,8 @@ def _process_participant_row(
     persons_by_subj: Dict[str, Person],
     directory: str,
     bids_root: Path,
+    cde: Graph,
+    column_to_terms: dict,
     subject_filter: Optional[str] = None,
 ) -> Optional[str]:
     """Materialize the NIDM nodes for one participants.tsv row.
@@ -367,6 +437,11 @@ def _process_participant_row(
     Creates a per-subject Session + AssessmentAcquisition + AssessmentObject
     + Person and registers them in *sessions_by_subj* / *persons_by_subj*
     so the imaging walk can reuse them.
+
+    *cde* and *column_to_terms* are the outputs of an upstream
+    :func:`map_variables_to_terms` call covering the non-BIDS columns
+    of the participants.tsv; phase D uses them to emit per-row attribute
+    triples via :func:`add_attributes_with_cde`.
 
     Returns the bare subject id (e.g. ``'01'``) when the row was processed,
     or ``None`` when skipped (subject_filter mismatch).
@@ -407,7 +482,78 @@ def _process_participant_row(
     _maybe_attach_participants_sidecar(
         acq, acq_entity, collection, directory, bids_root
     )
+
+    # Phase D -- attach per-row CDE-style attribute triples.
+    _apply_participant_row_cdes(row, acq_entity, cde)
+    # column_to_terms is reserved for future enhancements (e.g. emitting
+    # explicit isAbout linkage on the per-row triples).
+    del column_to_terms
     return subjid
+
+
+# ---------------------------------------------------------------------------
+# Phase D: CLI-arg resolution + map_variables_to_terms wrapper
+# ---------------------------------------------------------------------------
+
+
+def _resolve_participants_args(args, directory: str) -> Tuple[Optional[str], bool]:
+    """Resolve (*json_source*, *associate_concepts*) from CLI args.
+
+    Mirrors the legacy precedence:
+      * If ``args.json_map`` is falsey, fall back to
+        ``<directory>/participants.json`` if it exists, else None.
+      * If ``args.json_map`` is a path, use it directly.
+      * ``args.no_concepts`` flips the concept-association switch.
+
+    When *args* is None (programmatic invocation), defaults to:
+      ``(None, False)`` -- no interactive prompts, no json source.
+    """
+    if args is None:
+        return None, False
+    json_map = getattr(args, "json_map", False)
+    if not json_map:
+        candidate = os.path.join(directory, "participants.json")
+        json_source = candidate if os.path.isfile(candidate) else None
+    else:
+        json_source = json_map
+    associate_concepts = not getattr(args, "no_concepts", False)
+    return json_source, associate_concepts
+
+
+def _build_participants_cde(
+    fieldnames: List[str],
+    directory: str,
+    args,
+) -> Tuple[Graph, dict]:
+    """Build (cde, column_to_terms) for the non-BIDS participants.tsv
+    columns by calling :func:`map_variables_to_terms` on the unmapped
+    columns.
+
+    When *args* is None or there are no unmapped columns, returns
+    ``(empty_cde, {})`` without calling map_variables_to_terms (avoids
+    spurious file writes + interactive prompts during programmatic use).
+    """
+    mapping_list = [f for f in fieldnames if f not in BIDS_Constants.participants]
+    if not mapping_list or args is None:
+        return Graph(), {}
+
+    json_source, associate_concepts = _resolve_participants_args(args, directory)
+    try:
+        from pandas import DataFrame
+    except ImportError:  # pragma: no cover -- pandas is in install_requires
+        return Graph(), {}
+
+    temp = DataFrame(columns=mapping_list)
+    column_to_terms, cde = map_variables_to_terms(
+        directory=directory,
+        assessment_name="participants.tsv",
+        df=temp,
+        output_file=os.path.join(directory, "participants.json"),
+        json_source=json_source,
+        bids=True,
+        associate_concepts=associate_concepts,
+    )
+    return cde, column_to_terms
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +809,7 @@ def addimagingsessions(
 
 def bidsmri2project(
     directory,
-    args=None,  # noqa: U100 -- consumed in Phase D (json_map, no_concepts flags)
+    args=None,
     subject_filter: Optional[str] = None,
     project_uuid: Optional[str] = None,
     dataset_uuid: Optional[str] = None,
@@ -704,9 +850,20 @@ def bidsmri2project(
     persons_by_subj: Dict[str, Person] = {}
 
     # ------------------------------------------------------------------
-    # Phase B -- participants.tsv -> Person / Session / AssessmentObject
+    # Phase B/D -- participants.tsv -> Person / Session / AssessmentObject
+    # + CDE attachment for participants.tsv columns.
     # ------------------------------------------------------------------
     fieldnames, rows = _read_participants_tsv(directory)
+    # Phase D: build the CDE graph + column_to_terms once for all rows
+    # (mapping is per-column, not per-row).  Returns empty cde + dict
+    # when args is None or no non-BIDS columns are present.
+    row_cde, row_column_to_terms = _build_participants_cde(
+        fieldnames, directory, args
+    )
+    if len(row_cde) > 0:
+        # Union the participants CDE into the main cde graph so the
+        # downstream serializer picks it up.
+        cde = cde + row_cde
     for row in rows:
         _process_participant_row(
             row=row,
@@ -716,6 +873,8 @@ def bidsmri2project(
             persons_by_subj=persons_by_subj,
             directory=directory,
             bids_root=bids_root,
+            cde=cde,
+            column_to_terms=row_column_to_terms,
             subject_filter=subject_filter,
         )
 
@@ -752,10 +911,6 @@ def bidsmri2project(
             collection=collection,
             project=project,
         )
-
-    # fieldnames currently unused at top level; Phase D consumes them
-    # for the CDE-attachment logic via map_variables_to_terms.
-    del fieldnames
 
     return project, collection, cde, cde_pheno
 
