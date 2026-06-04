@@ -275,7 +275,7 @@ def _lit(value):
 
 def bidsmri2project(
     directory,
-    args=None,
+    args=None,  # noqa: U100 -- consumed in Phase B (json_map, no_concepts flags)
     subject_filter: Optional[str] = None,
     project_uuid: Optional[str] = None,
     dataset_uuid: Optional[str] = None,
@@ -307,9 +307,7 @@ def bidsmri2project(
     dataset = _load_dataset_description(directory)
 
     project = Project(uuid=project_uuid) if project_uuid is not None else Project()
-    collection = Collection(
-        project, uuid=dataset_uuid, extra_types=[BIDS.Dataset]
-    )
+    collection = Collection(project, uuid=dataset_uuid, extra_types=[BIDS.Dataset])
 
     _apply_dataset_description(project, collection, dataset)
 
@@ -322,7 +320,11 @@ def bidsmri2project(
             continue
         subject_id = subject_dir.name  # "sub-01"
         # parse the bare id without "sub-" prefix for filter matching
-        bare_id = subject_id.removeprefix("sub-") if hasattr(str, "removeprefix") else subject_id[4:]
+        bare_id = (
+            subject_id.removeprefix("sub-")
+            if hasattr(str, "removeprefix")
+            else subject_id[4:]
+        )
         if subject_filter is not None and bare_id != subject_filter:
             continue
 
@@ -380,39 +382,63 @@ def _build_arg_parser() -> ArgumentParser:
         formatter_class=RawTextHelpFormatter,
     )
     parser.add_argument(
-        "-d", dest="directory", required=True,
+        "-d",
+        dest="directory",
+        required=True,
         help="Full path to BIDS dataset directory",
     )
     parser.add_argument(
-        "-jsonld", "--jsonld", action="store_true",
+        "-jsonld",
+        "--jsonld",
+        action="store_true",
         help="If flag set, output is json-ld not TURTLE",
     )
     parser.add_argument(
-        "-bidsignore", "--bidsignore", action="store_true", default=False,
+        "-bidsignore",
+        "--bidsignore",
+        action="store_true",
+        default=False,
         help="If flag set, tool will add NIDM-related files to .bidsignore",
     )
     parser.add_argument(
-        "-no_concepts", "--no_concepts", action="store_true", default=False,
+        "-no_concepts",
+        "--no_concepts",
+        action="store_true",
+        default=False,
         help="If flag set, tool will not do concept mapping",
     )
     mapvars = parser.add_argument_group("map variables to terms arguments")
     mapvars.add_argument(
-        "-json_map", "--json_map", dest="json_map", required=False, default=False,
+        "-json_map",
+        "--json_map",
+        dest="json_map",
+        required=False,
+        default=False,
         help="Optional full path to user-supplied JSON file containing variable-term mappings.",
     )
     parser.add_argument(
-        "-log", "--log", dest="logfile", required=False, default=None,
+        "-log",
+        "--log",
+        dest="logfile",
+        required=False,
+        default=None,
         help=(
             "Full path to directory to save log file.  Log file is "
             "bidsmri2nidm_[basename(directory)].log"
         ),
     )
     parser.add_argument(
-        "-o", dest="outputfile", required=False, default="nidm.ttl",
+        "-o",
+        dest="outputfile",
+        required=False,
+        default="nidm.ttl",
         help="Output turtle filename (or directory in --per_subject mode).",
     )
     parser.add_argument(
-        "-per_subject", "--per_subject", action="store_true", default=False,
+        "-per_subject",
+        "--per_subject",
+        action="store_true",
+        default=False,
         help=(
             "Emit one NIDM turtle file per subject, named sub-<id>_nidm.ttl.  "
             "By default they go in the BIDS directory; use -o to specify a "
@@ -444,7 +470,7 @@ def _list_subjects(directory) -> List[str]:
         name = sub_dir.name
         if name.startswith("sub-."):
             continue
-        subjects.append(name[len("sub-"):])
+        subjects.append(name[len("sub-") :])
     return subjects
 
 
@@ -473,18 +499,21 @@ def main(argv: Optional[list] = None) -> int:
             _log.warning(
                 "Output directory %s is outside BIDS directory %s; per-subject "
                 "files will not be added to .bidsignore",
-                out_dir, directory,
+                out_dir,
+                directory,
             )
 
         # Share project + dataset UUIDs across per-subject runs.
         from ..core import getUUID
+
         shared_project_uuid = getUUID()
         shared_dataset_uuid = getUUID()
 
         for subj in _list_subjects(directory):
             _log.info("Building NIDM file for subject %s", subj)
             project, collection, cde, cde_pheno = bidsmri2project(
-                directory, args,
+                directory,
+                args,
                 subject_filter=subj,
                 project_uuid=shared_project_uuid,
                 dataset_uuid=shared_dataset_uuid,
@@ -496,10 +525,14 @@ def main(argv: Optional[list] = None) -> int:
                 else None
             )
             _write_nidm_graph(
-                project=project, collection=collection, cde=cde, cde_pheno=cde_pheno,
+                project=project,
+                collection=collection,
+                cde=cde,
+                cde_pheno=cde_pheno,
                 outputfile=outputfile,
                 bidsignore=bidsignore_name is not None,
-                directory=directory, bidsignore_name=bidsignore_name,
+                directory=directory,
+                bidsignore_name=bidsignore_name,
             )
     else:
         project, collection, cde, cde_pheno = bidsmri2project(directory, args)
@@ -509,10 +542,14 @@ def main(argv: Optional[list] = None) -> int:
             else args.outputfile
         )
         _write_nidm_graph(
-            project=project, collection=collection, cde=cde, cde_pheno=cde_pheno,
+            project=project,
+            collection=collection,
+            cde=cde,
+            cde_pheno=cde_pheno,
             outputfile=outputfile,
             bidsignore=args.bidsignore,
-            directory=directory, bidsignore_name=args.outputfile,
+            directory=directory,
+            bidsignore_name=args.outputfile,
         )
     return 0
 
@@ -539,6 +576,7 @@ def _pynidm_version() -> str:
     """Return the installed PyNIDM version, or 'unknown'."""
     try:
         from nidm import __version__ as v  # type: ignore[attr-defined]
+
         return str(v)
     except Exception:
         return "unknown"
@@ -547,6 +585,7 @@ def _pynidm_version() -> str:
 def _runtime_platform() -> str:
     """Return e.g. 'Python 3.9.23' for the SoftwareAgent runtime_platform."""
     import platform
+
     return f"Python {platform.python_version()}"
 
 

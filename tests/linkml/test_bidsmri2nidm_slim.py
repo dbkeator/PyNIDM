@@ -314,11 +314,15 @@ def test_export_activity_records_software_agent(tmp_path: Path):
     ]
     # SCHEMA.name may or may not be set on the library agent; check via
     # any agent that carries the script name predicate or the library label.
-    assert library_agents or any(
-        "PyNIDM" in str(o)
-        for a in agents
-        for o in g.objects(a, BIDS["x_pynidm_marker"])  # noqa: just a probe
-    ) or True  # the agent existence check above is the load-bearing assert
+    assert (
+        library_agents
+        or any(
+            "PyNIDM" in str(o)
+            for a in agents
+            for o in g.objects(a, BIDS["x_pynidm_marker"])  # noqa: just a probe
+        )
+        or True
+    )  # the agent existence check above is the load-bearing assert
 
 
 def test_write_serializes_and_roundtrips(tmp_path: Path):
