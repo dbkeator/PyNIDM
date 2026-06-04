@@ -34,14 +34,14 @@ from nidm.linkml.core.namespaces import (
     SCHEMA,
     SIO,
 )
-
-# AssessmentObject is typed onli:assessment-instrument in the wrapper.
-_ASSESSMENT_OBJECT_TYPE = ONLI["assessment-instrument"]
 from nidm.linkml.experiment.tools.bidsmri2nidm import (
     _write_nidm_graph,
     bidsmri2project,
     main,
 )
+
+# AssessmentObject is typed onli:assessment-instrument in the wrapper.
+_ASSESSMENT_OBJECT_TYPE = ONLI["assessment-instrument"]
 
 # ---------------------------------------------------------------------------
 # Fixture builders
