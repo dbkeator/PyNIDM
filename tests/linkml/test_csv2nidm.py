@@ -14,9 +14,14 @@ from rdflib.namespace import RDF
 from nidm.linkml.core.constants import DD
 from nidm.linkml.core.namespaces import NIDM, ONLI, PROV, SIO
 from nidm.linkml.experiment.tools.csv2nidm import (
+    _find_person_for_csv_row,
+    _query_subject_ids,
     _read_input_dataframe,
     _resolve_json_map,
+    _write_existing_nidm_back,
+    _write_nidm_graph,
     ask_idfield,
+    csv2nidm_add_to_existing,
     csv2nidm_main,
     csv2nidm_project,
     detect_idfield,
@@ -343,3 +348,203 @@ def test_csv2nidm_main_writes_output_with_json_map(tmp_path: Path):
     g = Graph()
     g.parse(source=str(out_path), format="turtle")
     assert len(g) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase B: -nidm add-to-existing helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_existing_nidm_file(tmp_path: Path, subjects: list) -> Path:
+    """Build a base NIDM file with one Person per *subjects* entry,
+    using csv2nidm_project end-to-end and writing to disk."""
+    csv_path = _write_csv(
+        tmp_path, "base.csv", ["participant_id"],
+        [[s] for s in subjects],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    out_path = tmp_path / "existing.ttl"
+    project, cde = csv2nidm_project(
+        csv_file=str(csv_path),
+        output_file=str(out_path),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    _write_nidm_graph(project=project, cde=cde, output_file=str(out_path))
+    return out_path
+
+
+def test_query_subject_ids_returns_persons_from_existing_file(tmp_path: Path):
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01", "sub-02"])
+    # Use read_nidm to load, then check the query helper.
+    from nidm.linkml.experiment.utils import read_nidm
+
+    project = read_nidm(existing)
+    index = _query_subject_ids(project)
+    ids = sorted(src_id for _, src_id in index)
+    assert ids == ["sub-01", "sub-02"]
+
+
+def test_query_subject_ids_returns_empty_when_no_persons(tmp_path: Path):
+    """A NIDM file with no prov:Person subjects yields an empty index."""
+    # Build a project + write it without rows -> no Persons.
+    from nidm.linkml.experiment.project import Project as _Project
+    from nidm.linkml.experiment.utils import read_nidm
+
+    p = _Project()
+    out_path = tmp_path / "empty.ttl"
+    p.write(out_path)
+    project = read_nidm(out_path)
+    assert _query_subject_ids(project) == []
+
+
+def test_find_person_for_csv_row_exact_match():
+    index = [("uri-A", "sub-01"), ("uri-B", "sub-02")]
+    assert _find_person_for_csv_row("sub-01", index) == "uri-A"
+    assert _find_person_for_csv_row("sub-02", index) == "uri-B"
+
+
+def test_find_person_for_csv_row_strips_leading_zeros():
+    """Matching tolerates leading-zero variants (BIDS-in-the-wild quirk)."""
+    index = [("uri-A", "01"), ("uri-B", "002")]
+    # df_value '0001' should still match '01' after lstrip.
+    assert _find_person_for_csv_row("0001", index) == "uri-A"
+
+
+def test_find_person_for_csv_row_no_match_returns_none():
+    index = [("uri-A", "sub-01")]
+    assert _find_person_for_csv_row("sub-99", index) is None
+
+
+def test_csv2nidm_add_to_existing_matches_and_appends_assessment(tmp_path: Path):
+    """End-to-end -nidm path: build a base NIDM file, then add CSV
+    metadata for sub-01; the resulting project graph should carry an
+    additional AssessmentObject linked to the existing Person."""
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+
+    # CSV with a row for the same subject + an unrelated 'age' column.
+    csv_path = _write_csv(
+        tmp_path, "phen.csv", ["participant_id", "age"],
+        [["sub-01", 25]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+
+    project, cde, rows_added = csv2nidm_add_to_existing(
+        csv_file=str(csv_path),
+        nidm_file=str(existing),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    assert rows_added == 1
+    g = project.graph
+    # The original Person from the base file plus the new
+    # AssessmentObject from the -nidm add path are both present.
+    persons = list(g.subjects(RDF.type, PROV.Person))
+    assert len(persons) == 1  # no duplicate Person was created
+    aos = list(g.subjects(RDF.type, _ASSESSMENT_OBJECT_TYPE))
+    # The original file already had an AssessmentObject from base build
+    # plus the new one => 2.
+    assert len(aos) >= 2
+
+
+def test_csv2nidm_add_to_existing_no_match_returns_zero(tmp_path: Path):
+    """When no CSV row matches an existing subject, rows_added=0."""
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    csv_path = _write_csv(
+        tmp_path, "phen.csv", ["participant_id", "age"],
+        [["sub-99", 25]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+
+    _, _, rows_added = csv2nidm_add_to_existing(
+        csv_file=str(csv_path),
+        nidm_file=str(existing),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    assert rows_added == 0
+
+
+def test_write_existing_nidm_back_creates_backup(tmp_path: Path):
+    """_write_existing_nidm_back should preserve the original via a .bak."""
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    original_size = existing.stat().st_size
+
+    from nidm.linkml.experiment.utils import read_nidm
+
+    project = read_nidm(existing)
+    cde = Graph()
+    _write_existing_nidm_back(project, cde, str(existing))
+
+    assert (existing.parent / "existing.ttl.bak").exists()
+    backup_size = (existing.parent / "existing.ttl.bak").stat().st_size
+    # The .bak file has the original (pre-write) content size.
+    assert backup_size == original_size
+
+
+def test_csv2nidm_main_nidm_path_writes_back(tmp_path: Path):
+    """End-to-end CLI: -csv + -nidm path appends new rows + writes the
+    file back (and creates a .bak)."""
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    csv_path = _write_csv(
+        tmp_path, "phen.csv", ["participant_id", "age"],
+        [["sub-01", 25]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    rc = csv2nidm_main(
+        [
+            "-csv", str(csv_path),
+            "-nidm", str(existing),
+            "-json_map", str(json_map),
+            "-no_concepts",
+        ]
+    )
+    assert rc == 0
+    assert (existing.parent / "existing.ttl.bak").exists()
+
+
+def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
+    """When no rows match an existing subject, the file isn't rewritten."""
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    pre_mtime = existing.stat().st_mtime
+    csv_path = _write_csv(
+        tmp_path, "phen.csv", ["participant_id", "age"],
+        [["sub-99", 25]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+
+    import time
+
+    time.sleep(0.05)  # ensure clock ticks past the original mtime resolution
+    rc = csv2nidm_main(
+        [
+            "-csv", str(csv_path),
+            "-nidm", str(existing),
+            "-json_map", str(json_map),
+            "-no_concepts",
+        ]
+    )
+    assert rc == 0
+    # File untouched.
+    assert existing.stat().st_mtime == pytest.approx(pre_mtime, abs=0.5)
+
+
+def test_csv2nidm_main_derivative_still_unsupported(tmp_path: Path):
+    """-derivative still exits 3 (Phase C)."""
+    csv_path = _write_csv(
+        tmp_path, "data.csv", ["participant_id"], [["sub-01"]]
+    )
+    deriv = tmp_path / "soft.csv"
+    deriv.write_text("title,description,version,url,cmdline,platform,ID\n")
+    with pytest.raises(SystemExit) as exc:
+        csv2nidm_main(
+            [
+                "-csv", str(csv_path),
+                "-out", str(tmp_path / "out.ttl"),
+                "-derivative", str(deriv),
+            ]
+        )
+    assert exc.value.code == 3

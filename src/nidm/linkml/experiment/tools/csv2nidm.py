@@ -39,12 +39,13 @@ from ..utils import (
     add_export_provenance,
     csv_dd_to_json_dd,
     map_variables_to_terms,
+    read_nidm,
     redcap_datadictionary_to_json,
 )
 from ...core import constants as _C
 from ...core.namespaces import NFO, SIO
 
-__version__ = "0.1.0"  # Phase A
+__version__ = "0.2.0"  # Phase B: -nidm add-to-existing
 _log = logging.getLogger(__name__)
 
 
@@ -232,6 +233,182 @@ def _write_nidm_graph(
 
 
 # ---------------------------------------------------------------------------
+# Phase B: -nidm add-to-existing helpers
+# ---------------------------------------------------------------------------
+
+
+def _query_subject_ids(project: Project) -> List[Tuple[Any, str]]:
+    """Return ``[(person_uri, src_subject_id), ...]`` from *project*.
+
+    Runs a SPARQL query against the loaded NIDM graph to enumerate
+    every prov:Person and its ndar:src_subject_id.  Returns an empty
+    list when the graph has no persons.
+    """
+    query = """
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
+        SELECT ?person ?id WHERE {
+            ?person a prov:Person ;
+                    ndar:src_subject_id ?id .
+        }
+    """
+    return [(row[0], str(row[1])) for row in project.graph.query(query)]
+
+
+def _find_person_for_csv_row(
+    df_value: str, subject_index: List[Tuple[Any, str]]
+) -> Optional[Any]:
+    """Find the prov:Person URI for *df_value* in the existing NIDM file.
+
+    Mirrors the legacy lenient matching: strip leading zeros from both
+    sides and check substring containment (matches the BIDS quirk
+    where participants.tsv has 'sub-01' and df rows have '01' or vice
+    versa).
+    """
+    needle = str(df_value).lstrip("0")
+    for person_uri, src_id in subject_index:
+        src_stripped = src_id.lstrip("0")
+        if src_stripped in needle or src_stripped == needle:
+            return person_uri
+        if src_id in str(df_value):
+            return person_uri
+    return None
+
+
+def _attach_csv_row_to_existing_project(
+    df_row: pd.Series,
+    df_columns: List[str],
+    project: Project,
+    cde: Graph,
+    person_uri: Any,
+    id_field: Optional[str],
+    csv_file_path: str,
+) -> None:
+    """Add one Session + AssessmentAcquisition + AssessmentObject to
+    *project* for *df_row*, linking the new acquisition to the existing
+    *person_uri* via ``add_qualified_association`` on the wrapper.
+    """
+    from rdflib import Literal as _Lit
+
+    session = Session(project)
+    acq = AssessmentAcquisition(session=session)
+    acq_entity = AssessmentObject(acquisition=acq)
+    acq_entity.graph.add(
+        (acq_entity.identifier, NFO.filename, _Lit(basename(csv_file_path)))
+    )
+    # Link the new acquisition to the existing Person via a Person
+    # wrapper.from_existing_subject so the qualifiedAssociation lands.
+    existing_person = Person.from_existing_subject(project.graph, person_uri)
+    acq.add_qualified_association(existing_person, role=SIO.Subject)
+
+    for column in df_columns:
+        if column == id_field:
+            continue
+        value = df_row[column]
+        if pd.isna(value):
+            continue
+        add_attributes_with_cde(
+            obj=acq_entity, cde=cde, row_variable=column, value=value
+        )
+
+
+def csv2nidm_add_to_existing(
+    csv_file: str,
+    nidm_file: str,
+    *,
+    json_map=None,
+    associate_concepts: bool = False,
+    dataset_identifier: Optional[str] = None,
+    id_field: Optional[str] = None,
+) -> Tuple[Project, Graph, int]:
+    """Add CSV data to an existing NIDM file in place.
+
+    Returns ``(project, cde_graph, rows_added)``.  When zero rows
+    matched any existing subject, the caller can skip the serialization
+    step (matches legacy ``data_added`` short-circuit).
+    """
+    df = _read_input_dataframe(csv_file)
+    out_dir = dirname(nidm_file)
+    assessment_name = basename(csv_file)
+
+    column_to_terms, cde = map_variables_to_terms(
+        df=df,
+        assessment_name=assessment_name,
+        directory=out_dir,
+        output_file=nidm_file,
+        json_source=json_map,
+        associate_concepts=associate_concepts,
+    )
+    del dataset_identifier  # reserved for Phase C / dataset hashing
+
+    if id_field is None:
+        id_field = detect_idfield(column_to_terms) if column_to_terms else None
+    if id_field is None:
+        # Legacy falls back to interactive prompt; programmatic callers
+        # should pass id_field explicitly.
+        id_field = ask_idfield(df)
+
+    # Re-read with id_field constrained to string (matches legacy:
+    # avoids losing leading zeros on zero-padded subject IDs).
+    df = (
+        pd.read_csv(csv_file, dtype={id_field: str})
+        if csv_file.endswith(".csv")
+        else pd.read_csv(csv_file, dtype={id_field: str}, sep="\t")
+    )
+
+    project = read_nidm(nidm_file)
+    subject_index = _query_subject_ids(project)
+    rows_added = 0
+    df_columns = list(df.columns)
+    for _, row in df.iterrows():
+        person_uri = _find_person_for_csv_row(row[id_field], subject_index)
+        if person_uri is None:
+            continue
+        _attach_csv_row_to_existing_project(
+            df_row=row,
+            df_columns=df_columns,
+            project=project,
+            cde=cde,
+            person_uri=person_uri,
+            id_field=id_field,
+            csv_file_path=csv_file,
+        )
+        rows_added += 1
+
+    return project, cde, rows_added
+
+
+def _write_existing_nidm_back(
+    project: Project,
+    cde: Graph,
+    nidm_file: str,
+    backup: bool = True,
+) -> None:
+    """Serialize *project* + *cde* back to *nidm_file*, optionally
+    backing the original up to ``<file>.bak`` first."""
+    from shutil import copy2
+
+    if backup:
+        copy2(src=nidm_file, dst=nidm_file + ".bak")
+    rdf_graph = Graph()
+    from io import StringIO
+
+    rdf_graph.parse(source=StringIO(project.serialize_turtle()), format="turtle")
+    rdf_graph = rdf_graph + cde
+    rdf_graph = add_export_provenance(
+        rdf_graph=rdf_graph,
+        collection=None,
+        outputfile=nidm_file,
+        pynidm_version=_pynidm_version(),
+        tool_version=__version__,
+        script_name="csv2nidm.py",
+        activity_label="Add CSV data to NIDM file",
+        output_format="turtle",
+    )
+    rdf_graph.serialize(destination=nidm_file, format="turtle")
+
+
+# ---------------------------------------------------------------------------
 # Programmatic entry point
 # ---------------------------------------------------------------------------
 
@@ -409,16 +586,35 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
         )
         _log.info("csv2nidm %s", args)
 
-    if args.nidm_file is not None or args.derivative is not None:
-        # Phase B path not yet wired up.
+    if args.derivative is not None:
+        # Phase C path not yet wired up.
         print(
-            "ERROR: -nidm and -derivative are not yet implemented in the "
-            "LinkML port (Phase B).  Use the legacy nidm.experiment.tools.csv2nidm "
-            "until Phase B lands."
+            "ERROR: -derivative is not yet implemented in the LinkML port "
+            "(Phase C).  Use the legacy nidm.experiment.tools.csv2nidm until "
+            "Phase C lands."
         )
-        sys.exit(2)
+        sys.exit(3)
 
     json_map = _resolve_json_map(args)
+
+    if args.nidm_file is not None:
+        # Phase B path: add to existing NIDM file.
+        project, cde, rows_added = csv2nidm_add_to_existing(
+            csv_file=args.csv_file,
+            nidm_file=args.nidm_file,
+            json_map=json_map,
+            associate_concepts=not args.no_concepts,
+            dataset_identifier=args.dataset_identifier,
+        )
+        if rows_added == 0:
+            print(
+                "No CSV rows matched any existing subject in the NIDM file; "
+                "leaving the original file untouched."
+            )
+            return 0
+        _write_existing_nidm_back(project, cde, args.nidm_file)
+        return 0
+
     project, cde = csv2nidm_project(
         csv_file=args.csv_file,
         output_file=args.output_file,
