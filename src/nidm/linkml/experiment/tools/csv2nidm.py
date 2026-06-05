@@ -28,6 +28,7 @@ import sys
 from typing import Any, List, Optional, Tuple
 import pandas as pd
 from rdflib import Graph
+from .bidsmri2nidm import _pynidm_version, _runtime_platform  # reuse from bidsmri2nidm
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
 from ..person import Person
@@ -42,7 +43,6 @@ from ..utils import (
 )
 from ...core import constants as _C
 from ...core.namespaces import NFO, SIO
-from .bidsmri2nidm import _pynidm_version, _runtime_platform  # reuse from bidsmri2nidm
 
 __version__ = "0.1.0"  # Phase A
 _log = logging.getLogger(__name__)
@@ -90,9 +90,7 @@ def ask_idfield(df) -> str:
         option += 1
     selection = input("Please select the subject ID field from the list above: ")
     while (not selection.isdigit()) or (int(selection) > int(option)):
-        selection = input(
-            "Please select the subject ID field from the list above: \t"
-        )
+        selection = input("Please select the subject ID field from the list above: \t")
     return df.columns[int(selection) - 1]
 
 
@@ -112,9 +110,7 @@ def _resolve_json_map(args) -> Optional[Any]:
       4. Otherwise None.
     """
     if getattr(args, "redcap", None):
-        return redcap_datadictionary_to_json(
-            args.redcap, basename(args.csv_file)
-        )
+        return redcap_datadictionary_to_json(args.redcap, basename(args.csv_file))
     if getattr(args, "json_map", None):
         return args.json_map
     csv_map = getattr(args, "csv_map", None)
@@ -272,8 +268,6 @@ def csv2nidm_project(
         json_source=json_map,
         associate_concepts=associate_concepts,
     )
-    # Stash for callers that want to inspect mappings post-hoc.
-    del column_to_terms
 
     if id_field is None:
         id_field = detect_idfield(column_to_terms) if column_to_terms else None
@@ -283,7 +277,11 @@ def csv2nidm_project(
         from rdflib import Literal as _Lit
 
         project.graph.add(
-            (project.identifier, _C.NIDM["dataset_identifier"], _Lit(dataset_identifier))
+            (
+                project.identifier,
+                _C.NIDM["dataset_identifier"],
+                _Lit(dataset_identifier),
+            )
         )
 
     df_columns = list(df.columns)
@@ -320,11 +318,15 @@ def _build_arg_parser() -> ArgumentParser:
     )
     dd_group = parser.add_mutually_exclusive_group()
     dd_group.add_argument(
-        "-json_map", dest="json_map", required=False,
+        "-json_map",
+        dest="json_map",
+        required=False,
         help="Full path to user-supplied JSON file containing variable-term mappings.",
     )
     dd_group.add_argument(
-        "-csv_map", dest="csv_map", required=False,
+        "-csv_map",
+        dest="csv_map",
+        required=False,
         help=(
             "Full path to user-supplied CSV-version of data dictionary "
             "with columns: source_variable, label, description, valueType, "
@@ -332,34 +334,51 @@ def _build_arg_parser() -> ArgumentParser:
         ),
     )
     dd_group.add_argument(
-        "-redcap", dest="redcap", required=False,
+        "-redcap",
+        dest="redcap",
+        required=False,
         help="Full path to a user-supplied RedCap formatted data dictionary.",
     )
     parser.add_argument(
-        "-nidm", dest="nidm_file", required=False,
+        "-nidm",
+        dest="nidm_file",
+        required=False,
         help="Optional full path of NIDM file to add CSV->NIDM converted graph to.",
     )
     parser.add_argument(
-        "-no_concepts", action="store_true", required=False,
+        "-no_concepts",
+        action="store_true",
+        required=False,
         help="Skip interactive concept association (requires a -json_map / -csv_map "
         "/ -redcap covering all variables).",
     )
     parser.add_argument(
-        "-log", "--log", dest="logfile", required=False, default=None,
+        "-log",
+        "--log",
+        dest="logfile",
+        required=False,
+        default=None,
         help="Full path to directory to save log file.",
     )
     parser.add_argument(
-        "-dataset_id", "--dataset_id", dest="dataset_identifier",
-        required=False, default=None,
+        "-dataset_id",
+        "--dataset_id",
+        dest="dataset_identifier",
+        required=False,
+        default=None,
         help="Optional dataset identifier (DOI is recommended).  When set, "
         "unique data element IDs include this string in the hash.",
     )
     parser.add_argument(
-        "-out", dest="output_file", required=False,
+        "-out",
+        dest="output_file",
+        required=False,
         help="Full path with filename to save NIDM file.",
     )
     parser.add_argument(
-        "-derivative", dest="derivative", required=False,
+        "-derivative",
+        dest="derivative",
+        required=False,
         help=(
             "Phase B (not yet active): software-metadata CSV path "
             "describing the tool that produced this derivative."
@@ -384,9 +403,7 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
         logging.basicConfig(
             filename=join(
                 args.logfile,
-                "csv2nidm_"
-                + os.path.splitext(basename(args.csv_file))[0]
-                + ".log",
+                "csv2nidm_" + os.path.splitext(basename(args.csv_file))[0] + ".log",
             ),
             level=logging.DEBUG,
         )
@@ -410,9 +427,7 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
         dataset_identifier=args.dataset_identifier,
     )
 
-    _write_nidm_graph(
-        project=project, cde=cde, output_file=args.output_file
-    )
+    _write_nidm_graph(project=project, cde=cde, output_file=args.output_file)
     return 0
 
 

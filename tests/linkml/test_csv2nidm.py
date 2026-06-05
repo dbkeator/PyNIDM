@@ -145,9 +145,7 @@ def test_detect_idfield_returns_none_when_no_match():
 
 
 def test_detect_idfield_handles_missing_isabout():
-    column_to_terms = {
-        str(DD(source="x", variable="age")): {"label": "Age"}
-    }
+    column_to_terms = {str(DD(source="x", variable="age")): {"label": "Age"}}
     assert detect_idfield(column_to_terms) is None
 
 
@@ -178,17 +176,13 @@ def _build_covering_json_map(tmp_path: Path, csv_path: Path) -> Path:
                 "label": "participant_id",
                 "description": "Subject identifier",
                 "source_variable": "participant_id",
-                "isAbout": [
-                    {"@id": str(_C.NIDM_SUBJECTID), "label": "subject_id"}
-                ],
+                "isAbout": [{"@id": str(_C.NIDM_SUBJECTID), "label": "subject_id"}],
             },
             "age": {
                 "label": "Age",
                 "description": "Age at scan",
                 "source_variable": "age",
-                "isAbout": [
-                    {"@id": "http://example.org/age", "label": "Age"}
-                ],
+                "isAbout": [{"@id": "http://example.org/age", "label": "Age"}],
             },
         },
     )
@@ -196,7 +190,9 @@ def _build_covering_json_map(tmp_path: Path, csv_path: Path) -> Path:
 
 def test_csv2nidm_project_creates_one_person_per_row(tmp_path: Path):
     csv_path = _write_csv(
-        tmp_path, "data.csv", ["participant_id", "age"],
+        tmp_path,
+        "data.csv",
+        ["participant_id", "age"],
         [["sub-01", 25], ["sub-02", 30]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -218,7 +214,9 @@ def test_csv2nidm_project_skips_id_field_in_cde_attachment(tmp_path: Path):
     (the participant id lands on the Person via subject_id, not as a
     raw NIDM-namespace predicate on the AssessmentObject)."""
     csv_path = _write_csv(
-        tmp_path, "data.csv", ["participant_id", "age"],
+        tmp_path,
+        "data.csv",
+        ["participant_id", "age"],
         [["sub-01", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -236,6 +234,7 @@ def test_csv2nidm_project_skips_id_field_in_cde_attachment(tmp_path: Path):
     # Person should carry the subject id (sub-01).
     person = list(g.subjects(RDF.type, PROV.Person))[0]
     from nidm.linkml.core.namespaces import NDAR
+
     ids = list(g.objects(person, NDAR.src_subject_id))
     assert any(str(i) == "sub-01" for i in ids)
 
@@ -307,22 +306,16 @@ def test_csv2nidm_project_skips_nan_values(tmp_path: Path):
 
 
 def test_csv2nidm_main_requires_nidm_or_out(tmp_path: Path):
-    csv_path = _write_csv(
-        tmp_path, "data.csv", ["participant_id"], [["sub-01"]]
-    )
+    csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
     with pytest.raises(SystemExit):
         csv2nidm_main(["-csv", str(csv_path)])
 
 
 def test_csv2nidm_main_rejects_phase_b_paths(tmp_path: Path):
     """-nidm and -derivative aren't implemented in Phase A; they exit(2)."""
-    csv_path = _write_csv(
-        tmp_path, "data.csv", ["participant_id"], [["sub-01"]]
-    )
+    csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
     with pytest.raises(SystemExit) as exc:
-        csv2nidm_main(
-            ["-csv", str(csv_path), "-nidm", str(tmp_path / "existing.ttl")]
-        )
+        csv2nidm_main(["-csv", str(csv_path), "-nidm", str(tmp_path / "existing.ttl")])
     assert exc.value.code == 2
 
 
@@ -335,9 +328,12 @@ def test_csv2nidm_main_writes_output_with_json_map(tmp_path: Path):
     out_path = tmp_path / "out.ttl"
     rc = csv2nidm_main(
         [
-            "-csv", str(csv_path),
-            "-json_map", str(json_map),
-            "-out", str(out_path),
+            "-csv",
+            str(csv_path),
+            "-json_map",
+            str(json_map),
+            "-out",
+            str(out_path),
             "-no_concepts",
         ]
     )
