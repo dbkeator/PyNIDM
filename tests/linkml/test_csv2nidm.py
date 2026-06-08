@@ -316,12 +316,16 @@ def test_csv2nidm_main_requires_nidm_or_out(tmp_path: Path):
         csv2nidm_main(["-csv", str(csv_path)])
 
 
-def test_csv2nidm_main_rejects_phase_b_paths(tmp_path: Path):
-    """-nidm and -derivative aren't implemented in Phase A; they exit(2)."""
+def test_csv2nidm_main_nidm_with_missing_file_raises(tmp_path: Path):
+    """Phase B: -nidm with a missing file path raises (rdflib can't parse it).
+
+    This documents that the tool defers file-existence errors to rdflib's
+    parse step rather than checking up front.  Could be improved in a
+    later polish pass, but matches legacy behavior.
+    """
     csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
-    with pytest.raises(SystemExit) as exc:
-        csv2nidm_main(["-csv", str(csv_path), "-nidm", str(tmp_path / "existing.ttl")])
-    assert exc.value.code == 2
+    with pytest.raises(FileNotFoundError):
+        csv2nidm_main(["-csv", str(csv_path), "-nidm", str(tmp_path / "nope.ttl")])
 
 
 def test_csv2nidm_main_writes_output_with_json_map(tmp_path: Path):
@@ -359,7 +363,9 @@ def _build_existing_nidm_file(tmp_path: Path, subjects: list) -> Path:
     """Build a base NIDM file with one Person per *subjects* entry,
     using csv2nidm_project end-to-end and writing to disk."""
     csv_path = _write_csv(
-        tmp_path, "base.csv", ["participant_id"],
+        tmp_path,
+        "base.csv",
+        ["participant_id"],
         [[s] for s in subjects],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -425,7 +431,9 @@ def test_csv2nidm_add_to_existing_matches_and_appends_assessment(tmp_path: Path)
 
     # CSV with a row for the same subject + an unrelated 'age' column.
     csv_path = _write_csv(
-        tmp_path, "phen.csv", ["participant_id", "age"],
+        tmp_path,
+        "phen.csv",
+        ["participant_id", "age"],
         [["sub-01", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -453,7 +461,9 @@ def test_csv2nidm_add_to_existing_no_match_returns_zero(tmp_path: Path):
     """When no CSV row matches an existing subject, rows_added=0."""
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
     csv_path = _write_csv(
-        tmp_path, "phen.csv", ["participant_id", "age"],
+        tmp_path,
+        "phen.csv",
+        ["participant_id", "age"],
         [["sub-99", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -490,15 +500,20 @@ def test_csv2nidm_main_nidm_path_writes_back(tmp_path: Path):
     file back (and creates a .bak)."""
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
     csv_path = _write_csv(
-        tmp_path, "phen.csv", ["participant_id", "age"],
+        tmp_path,
+        "phen.csv",
+        ["participant_id", "age"],
         [["sub-01", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
     rc = csv2nidm_main(
         [
-            "-csv", str(csv_path),
-            "-nidm", str(existing),
-            "-json_map", str(json_map),
+            "-csv",
+            str(csv_path),
+            "-nidm",
+            str(existing),
+            "-json_map",
+            str(json_map),
             "-no_concepts",
         ]
     )
@@ -511,7 +526,9 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
     pre_mtime = existing.stat().st_mtime
     csv_path = _write_csv(
-        tmp_path, "phen.csv", ["participant_id", "age"],
+        tmp_path,
+        "phen.csv",
+        ["participant_id", "age"],
         [["sub-99", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
@@ -521,9 +538,12 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
     time.sleep(0.05)  # ensure clock ticks past the original mtime resolution
     rc = csv2nidm_main(
         [
-            "-csv", str(csv_path),
-            "-nidm", str(existing),
-            "-json_map", str(json_map),
+            "-csv",
+            str(csv_path),
+            "-nidm",
+            str(existing),
+            "-json_map",
+            str(json_map),
             "-no_concepts",
         ]
     )
@@ -534,17 +554,18 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
 
 def test_csv2nidm_main_derivative_still_unsupported(tmp_path: Path):
     """-derivative still exits 3 (Phase C)."""
-    csv_path = _write_csv(
-        tmp_path, "data.csv", ["participant_id"], [["sub-01"]]
-    )
+    csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
     deriv = tmp_path / "soft.csv"
     deriv.write_text("title,description,version,url,cmdline,platform,ID\n")
     with pytest.raises(SystemExit) as exc:
         csv2nidm_main(
             [
-                "-csv", str(csv_path),
-                "-out", str(tmp_path / "out.ttl"),
-                "-derivative", str(deriv),
+                "-csv",
+                str(csv_path),
+                "-out",
+                str(tmp_path / "out.ttl"),
+                "-derivative",
+                str(deriv),
             ]
         )
     assert exc.value.code == 3
