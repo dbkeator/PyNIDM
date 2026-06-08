@@ -35,26 +35,30 @@ from nidm.linkml.experiment.core import Core
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Curated fixture set.  Add new entries as we discover edge cases the
-# read-back path needs to handle.  Each path is relative to the repo
-# root and must point at an existing turtle file.
+# Curated fixture set.  Every entry must be tracked in git so the
+# parity-test count is reproducible across machines.  ``_available_fixtures``
+# below still skips silently when something's missing, but if you add
+# a new entry here please also commit the fixture itself.
+#
+# Local research-data dirs (fmriprep_example/, hatton_linear_reg/, etc.)
+# used to live in this list, but those are user-specific data not in
+# the repo, so they caused different parity-test counts on different
+# machines.  Use ``EXTRA_LOCAL_FIXTURES`` below for opt-in local
+# fixtures during development.
 FIXTURE_PATHS = [
     REPO_ROOT / "tests" / "experiment" / "data" / "read_nidm" / "brainvol_nidm.ttl",
     REPO_ROOT / "tests" / "experiment" / "data" / "read_nidm" / "derivatives_nidm.ttl",
     REPO_ROOT / "tests" / "experiment" / "data" / "read_nidm" / "nidm_w_provenance.ttl",
-    REPO_ROOT
-    / "tests"
-    / "experiment"
-    / "data"
-    / "read_nidm"
-    / "nidm_w_provenance_roundtrip.ttl",
     REPO_ROOT / "tests" / "experiment" / "test_nidm.ttl",
-    REPO_ROOT / "fmriprep_example" / "bids_v2" / "nidm_only_fmriprep.ttl",
-    REPO_ROOT / "fmriprep_example" / "bids_v2" / "nidm_only_fmriprep_csv_dd.ttl",
-    REPO_ROOT / "fmriprep_example" / "kennedy_ohsu" / "nidm_minimal.ttl",
-    REPO_ROOT / "fmriprep_example" / "kennedy_ohsu" / "nidm_minimal_working.ttl",
-    REPO_ROOT / "hatton_linear_reg" / "nidm.ttl",
 ]
+
+# Optional: developers can drop additional NIDM .ttl files in
+# ``tests/linkml/local_fixtures/`` (gitignored) and they'll get picked
+# up automatically.  Keeps the repo-tracked set deterministic while
+# still letting people stress-test against personal datasets.
+_LOCAL_FIXTURE_DIR = REPO_ROOT / "tests" / "linkml" / "local_fixtures"
+if _LOCAL_FIXTURE_DIR.is_dir():
+    FIXTURE_PATHS.extend(sorted(_LOCAL_FIXTURE_DIR.glob("*.ttl")))
 
 
 def _available_fixtures():
