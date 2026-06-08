@@ -587,6 +587,22 @@ def _create_software_agent_for_derivative(
     return agent
 
 
+def _add_qualified_association_to_derivative(der: Derivative, agent, role) -> Any:
+    """Emit a prov:qualifiedAssociation triple linking *der* to *agent*.
+
+    The wrapper layer's ``add_qualified_association`` only exists on
+    ``Acquisition`` (which has a hard-coded ``Association`` parent
+    type).  Derivative needs the same pattern — agent + role embedded
+    in a blank-node Association referenced via prov:qualifiedAssociation
+    — so we build it here.  Returns the Association wrapper.
+    """
+    from ..association import Association
+
+    assoc = Association(der, agent=agent, had_role=role)
+    der.graph.add((der.identifier, PROV.qualifiedAssociation, assoc.identifier))
+    return assoc
+
+
 def _materialize_derivative_row(
     df_row: pd.Series,
     df_columns: List[str],
@@ -658,11 +674,12 @@ def _materialize_derivative_row(
     person_uri = _find_person_for_csv_row(subjectid, subject_index)
     if person_uri is not None:
         person = Person.from_existing_subject(project.graph, person_uri)
-        der.add_qualified_association(person, role=SIO.Subject)
+        _add_qualified_association_to_derivative(der, person, role=SIO.Subject)
 
     # Software agent + role.
     software_agent = _create_software_agent_for_derivative(project, software_metadata)
-    der.add_qualified_association(
+    _add_qualified_association_to_derivative(
+        der,
         software_agent,
         role=_C.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE,
     )
