@@ -31,9 +31,12 @@ from rdflib import Graph
 from .bidsmri2nidm import _pynidm_version, _runtime_platform  # reuse from bidsmri2nidm
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
+from ..derivative import Derivative
+from ..derivative_object import DerivativeObject
 from ..person import Person
 from ..project import Project
 from ..session import Session
+from ..software_agent import SoftwareAgent
 from ..utils import (
     add_attributes_with_cde,
     add_export_provenance,
@@ -45,7 +48,7 @@ from ..utils import (
 from ...core import constants as _C
 from ...core.namespaces import NFO, SIO
 
-__version__ = "0.2.0"  # Phase B: -nidm add-to-existing
+__version__ = "0.3.0"  # Phase C: -derivative + software metadata
 _log = logging.getLogger(__name__)
 
 
@@ -409,6 +412,342 @@ def _write_existing_nidm_back(
 
 
 # ---------------------------------------------------------------------------
+# Phase C: -derivative + software metadata
+# ---------------------------------------------------------------------------
+
+#: Columns the input CSV MUST carry when -derivative is in play.
+_DERIVATIVE_INPUT_REQUIRED = ("ses", "task", "run", "source_url")
+
+#: Columns the software-metadata CSV (passed to -derivative) MUST carry.
+_SOFTWARE_METADATA_REQUIRED = (
+    "title",
+    "description",
+    "version",
+    "url",
+    "cmdline",
+    "platform",
+    "ID",
+)
+
+
+def _validate_derivative_input_columns(df: pd.DataFrame) -> None:
+    """Ensure the input CSV has ses/task/run/source_url columns.
+
+    Sys-exits with the legacy error message when any are missing.
+    """
+    missing = [c for c in _DERIVATIVE_INPUT_REQUIRED if c not in df.columns]
+    if missing:
+        print(
+            "ERROR: -csv data file must have 'ses','task', 'run', 'source_url' "
+            "columns (even if empty) when the -derivative parameter is provided."
+        )
+        sys.exit(1)
+
+
+def _load_software_metadata(derivative_path: str) -> pd.DataFrame:
+    """Load the software-metadata CSV/TSV and validate its columns."""
+    if derivative_path.endswith(".csv"):
+        meta = pd.read_csv(derivative_path)
+    elif derivative_path.endswith(".tsv"):
+        meta = pd.read_csv(derivative_path, sep="\t", engine="python")
+    else:
+        print(
+            "ERROR: -derivative parameter must point at a .csv or .tsv file."
+        )
+        sys.exit(1)
+    missing = [c for c in _SOFTWARE_METADATA_REQUIRED if c not in meta.columns]
+    if missing:
+        print(
+            "ERROR: -derivative software metadata file must contain columns "
+            "title, description, version, url, cmdline, platform, ID (even if "
+            "empty).  Missing: %s" % ", ".join(missing)
+        )
+        sys.exit(1)
+    return meta
+
+
+def find_session_for_subjectid(
+    session_num: Optional[str], subjectid: str, nidm_file: str
+) -> Optional[Any]:
+    """Look up a Session URI by its bids:session_number for *subjectid*.
+
+    Delegates to ``GetParticipantSessionsMetadata`` (via the Query
+    shim) and scans the returned DataFrame for the row whose
+    ``p`` (predicate) is ``bids:session_number`` and whose ``o``
+    (object) matches *session_num*.
+    """
+    from ...core import constants as _C
+    from ..query import GetParticipantSessionsMetadata
+
+    if session_num is None:
+        return None
+    session_metadata = GetParticipantSessionsMetadata([nidm_file], subjectid)
+    derivative_session = None
+    bids_session_number = _C.BIDS["session_number"]
+    for _, row in session_metadata.iterrows():
+        if str(row["p"]) == str(bids_session_number) and str(row["o"]) == session_num:
+            derivative_session = row["session_uuid"]
+            break
+    return derivative_session
+
+
+def match_acquistion_task_run_from_session(
+    subject_id: str,
+    session_uuid: Optional[Any],
+    task: Optional[str],
+    run: Optional[str],
+    nidm_file: str,
+) -> Tuple[Optional[Any], Optional[Any]]:
+    """Look up the acquisition entity + activity matching *task* / *run*.
+
+    Returns ``(acq_entity_uri, acq_activity_uri)`` from the first
+    matching row of the appropriate Query helper, or ``(None, None)``
+    when no match is found.
+
+    When *session_uuid* is None, walks every session for the subject
+    until a match is found (matches legacy).
+    """
+    from ..query import (
+        GetAcquisitionEntityFromSubjectSessionRun,
+        GetAcquisitionEntityFromSubjectSessionTask,
+        GetAcquisitionEntityFromSubjectSessionTaskRun,
+        GetParticipantSessionsMetadata,
+    )
+
+    def _first_row(df):
+        for _, row in df.iterrows():
+            return row.get("acq_entity"), row.get("acq_activity")
+        return None, None
+
+    def _lookup(session_uri):
+        if task and run:
+            return _first_row(
+                GetAcquisitionEntityFromSubjectSessionTaskRun(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session_uri,
+                    run=run,
+                    task=task,
+                )
+            )
+        if run and not task:
+            return _first_row(
+                GetAcquisitionEntityFromSubjectSessionRun(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session_uri,
+                    run=run,
+                )
+            )
+        if task and not run:
+            return _first_row(
+                GetAcquisitionEntityFromSubjectSessionTask(
+                    nidm_file_list=[nidm_file],
+                    subject_id=subject_id,
+                    session_uuid=session_uri,
+                    task=task,
+                )
+            )
+        return None, None
+
+    if session_uuid is not None:
+        return _lookup(session_uuid)
+
+    # Walk every session for the subject.
+    session_acts = GetParticipantSessionsMetadata([nidm_file], subject_id)
+    for _, session in session_acts.iterrows():
+        entity, activity = _lookup(session["session_uuid"])
+        if entity is not None:
+            return entity, activity
+    return None, None
+
+
+def _create_software_agent_for_derivative(
+    project: Project, software_metadata: pd.DataFrame
+) -> SoftwareAgent:
+    """Create a SoftwareAgent wrapper carrying the supplied metadata.
+
+    Uses the first row of *software_metadata* (legacy convention -- one
+    row per CSV).  Title / description / version / url / cmdline /
+    platform all get attached as named slots on the wrapper.
+    """
+
+    def _scalar(col):
+        return software_metadata[col].to_string(index=False).strip()
+
+    return SoftwareAgent(
+        project,
+        name=_scalar("title"),
+        software_version=_scalar("version"),
+        command=_scalar("cmdline"),
+        runtime_platform=_scalar("platform"),
+        url=_scalar("url"),
+    )
+
+
+def _materialize_derivative_row(
+    df_row: pd.Series,
+    df_columns: List[str],
+    project: Project,
+    cde: Graph,
+    id_field: str,
+    software_metadata: pd.DataFrame,
+    nidm_file: str,
+) -> bool:
+    """Materialize one Derivative + DerivativeObject for *df_row*.
+
+    Returns ``True`` when the row produced output (i.e. the
+    task/run/session matched an existing acquisition), ``False`` when
+    no source acquisition could be found and we silently skipped.
+    """
+    from rdflib import Literal as _Lit
+
+    subjectid = str(df_row[id_field]).lstrip("0")
+    session_num = str(df_row.get("ses", "nan"))
+    if session_num in ("nan", ""):
+        session_num = None
+    task = str(df_row.get("task", "nan"))
+    if task in ("nan", ""):
+        task = None
+    run = str(df_row.get("run", "nan"))
+    if run in ("nan", ""):
+        run = None
+
+    derivative_session = find_session_for_subjectid(
+        session_num, subjectid, nidm_file
+    )
+    source_acq_entity, source_activity = match_acquistion_task_run_from_session(
+        subject_id=subjectid,
+        session_uuid=derivative_session,
+        task=task,
+        run=run,
+        nidm_file=nidm_file,
+    )
+    if source_acq_entity is None:
+        return False
+
+    # Create the derivative + entity.
+    der = Derivative(project=project)
+    der_entity = DerivativeObject(derivative=der)
+
+    # prov:used link from the derivative activity to the matched
+    # source acquisition activity.
+    der.graph.add(
+        (der.identifier, PROV.used, source_activity)
+    )
+
+    # Add row metadata to the derivative entity.
+    skipped_columns = {id_field, "ses", "task", "run", "subject_id", "source_url"}
+    for column in df_columns:
+        if column in skipped_columns:
+            continue
+        value = df_row[column]
+        if pd.isna(value):
+            continue
+        add_attributes_with_cde(
+            obj=der_entity, cde=cde, row_variable=column, value=value
+        )
+
+    # source_url -> prov:Location on the derivative entity.
+    if "source_url" in df_columns and not pd.isna(df_row["source_url"]):
+        der_entity.graph.add(
+            (der_entity.identifier, PROV.Location, _Lit(df_row["source_url"]))
+        )
+
+    # Look up the existing Person for this subject so we can attach a
+    # qualified association.
+    subject_index = _query_subject_ids(project)
+    person_uri = _find_person_for_csv_row(subjectid, subject_index)
+    if person_uri is not None:
+        person = Person.from_existing_subject(project.graph, person_uri)
+        der.add_qualified_association(person, role=SIO.Subject)
+
+    # Software agent + role.
+    software_agent = _create_software_agent_for_derivative(project, software_metadata)
+    der.add_qualified_association(
+        software_agent,
+        role=_C.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE,
+    )
+    return True
+
+
+def csv2nidm_add_derivative_to_existing(
+    csv_file: str,
+    nidm_file: str,
+    derivative_file: str,
+    *,
+    json_map=None,
+    associate_concepts: bool = False,
+    dataset_identifier: Optional[str] = None,
+    id_field: Optional[str] = None,
+) -> Tuple[Project, Graph, int]:
+    """Add derivative data to an existing NIDM file.
+
+    Returns ``(project, cde_graph, rows_added)``.  When zero rows
+    matched any existing acquisition the caller can skip writing the
+    file back (matches legacy ``data_added`` short-circuit).
+    """
+    df = _read_input_dataframe(csv_file)
+    _validate_derivative_input_columns(df)
+    software_metadata = _load_software_metadata(derivative_file)
+
+    # Drop the derivative-required columns before running
+    # map_variables_to_terms so it doesn't complain about un-annotated
+    # ses/task/run/source_url columns.
+    df_for_mapping = df.drop(
+        columns=list(_DERIVATIVE_INPUT_REQUIRED), errors="ignore"
+    )
+
+    out_dir = dirname(nidm_file)
+    assessment_name = basename(csv_file)
+
+    # Use the software product URL as the CDE namespace so derivative
+    # data elements land in the software's namespace.
+    software_title = software_metadata["title"].to_string(index=False).strip()
+    software_url = software_metadata["url"].to_string(index=False).strip()
+    cde_namespace = {software_title: software_url}
+
+    column_to_terms, cde = map_variables_to_terms(
+        df=df_for_mapping,
+        assessment_name=assessment_name,
+        directory=out_dir,
+        output_file=nidm_file,
+        json_source=json_map,
+        associate_concepts=associate_concepts,
+        cde_namespace=cde_namespace,
+    )
+    del dataset_identifier  # reserved for future hash-id integration
+
+    if id_field is None:
+        id_field = detect_idfield(column_to_terms) if column_to_terms else None
+    if id_field is None:
+        id_field = ask_idfield(df)
+
+    # Re-read the CSV with id_field as string (preserves zero-padded IDs).
+    df = (
+        pd.read_csv(csv_file, dtype={id_field: str})
+        if csv_file.endswith(".csv")
+        else pd.read_csv(csv_file, dtype={id_field: str}, sep="\t")
+    )
+    df_columns = list(df.columns)
+
+    project = read_nidm(nidm_file)
+    rows_added = 0
+    for _, row in df.iterrows():
+        if _materialize_derivative_row(
+            df_row=row,
+            df_columns=df_columns,
+            project=project,
+            cde=cde,
+            id_field=id_field,
+            software_metadata=software_metadata,
+            nidm_file=nidm_file,
+        ):
+            rows_added += 1
+    return project, cde, rows_added
+
+
+# ---------------------------------------------------------------------------
 # Programmatic entry point
 # ---------------------------------------------------------------------------
 
@@ -586,16 +925,32 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
         )
         _log.info("csv2nidm %s", args)
 
-    if args.derivative is not None:
-        # Phase C path not yet wired up.
-        print(
-            "ERROR: -derivative is not yet implemented in the LinkML port "
-            "(Phase C).  Use the legacy nidm.experiment.tools.csv2nidm until "
-            "Phase C lands."
-        )
-        sys.exit(3)
-
     json_map = _resolve_json_map(args)
+
+    if args.derivative is not None:
+        # Phase C: -derivative + software metadata.  Requires -nidm.
+        if args.nidm_file is None:
+            print(
+                "ERROR: -derivative requires -nidm to identify the existing "
+                "NIDM file the derivative data attaches to."
+            )
+            sys.exit(1)
+        project, cde, rows_added = csv2nidm_add_derivative_to_existing(
+            csv_file=args.csv_file,
+            nidm_file=args.nidm_file,
+            derivative_file=args.derivative,
+            json_map=json_map,
+            associate_concepts=not args.no_concepts,
+            dataset_identifier=args.dataset_identifier,
+        )
+        if rows_added == 0:
+            print(
+                "No CSV rows matched any acquisition in the NIDM file; "
+                "leaving the original file untouched."
+            )
+            return 0
+        _write_existing_nidm_back(project, cde, args.nidm_file)
+        return 0
 
     if args.nidm_file is not None:
         # Phase B path: add to existing NIDM file.

@@ -15,12 +15,15 @@ from nidm.linkml.core.constants import DD
 from nidm.linkml.core.namespaces import NIDM, ONLI, PROV, SIO
 from nidm.linkml.experiment.tools.csv2nidm import (
     _find_person_for_csv_row,
+    _load_software_metadata,
     _query_subject_ids,
     _read_input_dataframe,
     _resolve_json_map,
+    _validate_derivative_input_columns,
     _write_existing_nidm_back,
     _write_nidm_graph,
     ask_idfield,
+    csv2nidm_add_derivative_to_existing,
     csv2nidm_add_to_existing,
     csv2nidm_main,
     csv2nidm_project,
@@ -552,9 +555,14 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
     assert existing.stat().st_mtime == pytest.approx(pre_mtime, abs=0.5)
 
 
-def test_csv2nidm_main_derivative_still_unsupported(tmp_path: Path):
-    """-derivative still exits 3 (Phase C)."""
-    csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
+def test_csv2nidm_main_derivative_requires_nidm(tmp_path: Path):
+    """-derivative without -nidm is an error (legacy parity)."""
+    csv_path = _write_csv(
+        tmp_path,
+        "data.csv",
+        ["participant_id", "ses", "task", "run", "source_url"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d"]],
+    )
     deriv = tmp_path / "soft.csv"
     deriv.write_text("title,description,version,url,cmdline,platform,ID\n")
     with pytest.raises(SystemExit) as exc:
@@ -568,4 +576,256 @@ def test_csv2nidm_main_derivative_still_unsupported(tmp_path: Path):
                 str(deriv),
             ]
         )
-    assert exc.value.code == 3
+    assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase C: -derivative + software metadata
+# ---------------------------------------------------------------------------
+
+
+def _write_software_metadata_csv(
+    tmp_path: Path,
+    title: str = "FSL",
+    description: str = "FSL software",
+    version: str = "6.0",
+    url: str = "http://fsl.org/",
+    cmdline: str = "fsl_anat",
+    platform: str = "Linux",
+    ID: str = "ilx_1234",
+) -> Path:
+    """Write a valid software-metadata CSV with all 7 required columns."""
+    target = tmp_path / "software.csv"
+    target.write_text(
+        "title,description,version,url,cmdline,platform,ID\n"
+        f"{title},{description},{version},{url},{cmdline},{platform},{ID}\n"
+    )
+    return target
+
+
+def test_validate_derivative_input_columns_passes_with_required_cols():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        columns=["participant_id", "ses", "task", "run", "source_url", "metric"]
+    )
+    _validate_derivative_input_columns(df)  # should not raise
+
+
+def test_validate_derivative_input_columns_exits_when_missing():
+    import pandas as pd
+
+    df = pd.DataFrame(columns=["participant_id", "ses", "task"])  # missing run/source_url
+    with pytest.raises(SystemExit):
+        _validate_derivative_input_columns(df)
+
+
+def test_load_software_metadata_validates_columns(tmp_path: Path):
+    valid = _write_software_metadata_csv(tmp_path)
+    meta = _load_software_metadata(str(valid))
+    assert list(meta.columns) == [
+        "title", "description", "version", "url", "cmdline", "platform", "ID",
+    ]
+
+
+def test_load_software_metadata_rejects_bad_extension(tmp_path: Path):
+    bogus = tmp_path / "bad.txt"
+    bogus.write_text("foo")
+    with pytest.raises(SystemExit):
+        _load_software_metadata(str(bogus))
+
+
+def test_load_software_metadata_rejects_missing_columns(tmp_path: Path):
+    short = tmp_path / "short.csv"
+    short.write_text("title,description\nFSL,FSL software\n")
+    with pytest.raises(SystemExit):
+        _load_software_metadata(str(short))
+
+
+def test_create_software_agent_carries_metadata(tmp_path: Path):
+    """The wrapper should expose the supplied title/version/cmdline/etc.
+    as triples on its graph."""
+    from nidm.linkml.experiment.tools.csv2nidm import (
+        _create_software_agent_for_derivative,
+    )
+    from nidm.linkml.experiment.project import Project as _Project
+    from nidm.linkml.core.namespaces import SCHEMA
+
+    project = _Project()
+    meta_path = _write_software_metadata_csv(
+        tmp_path, title="FSL", version="6.0.5", cmdline="fsl_anat",
+    )
+    meta = _load_software_metadata(str(meta_path))
+    agent = _create_software_agent_for_derivative(project, meta)
+    g = agent.graph
+    names = list(g.objects(agent.identifier, SCHEMA.name))
+    assert [str(n) for n in names] == ["FSL"]
+    versions = list(g.objects(agent.identifier, SCHEMA.softwareVersion))
+    assert [str(v) for v in versions] == ["6.0.5"]
+
+
+def test_find_session_for_subjectid_returns_none_when_session_num_is_none():
+    """When session_num is None the helper short-circuits without
+    touching the Query shim."""
+    from nidm.linkml.experiment.tools.csv2nidm import find_session_for_subjectid
+
+    assert find_session_for_subjectid(None, "sub-01", "/no/such/file") is None
+
+
+def test_match_acquistion_handles_no_session_no_task_no_run():
+    """No criteria -> no result (all 4 branches require at least one
+    of task/run to be set)."""
+    from nidm.linkml.experiment.tools.csv2nidm import (
+        match_acquistion_task_run_from_session,
+    )
+
+    entity, activity = match_acquistion_task_run_from_session(
+        subject_id="01",
+        session_uuid="some-session-uri",
+        task=None,
+        run=None,
+        nidm_file="/no/such/file",
+    )
+    assert (entity, activity) == (None, None)
+
+
+def test_csv2nidm_add_derivative_with_no_matching_acq_returns_zero(
+    tmp_path: Path, monkeypatch
+):
+    """When the query helpers can't find a matching acquisition,
+    rows_added is 0 and the project graph is unmodified."""
+    from nidm.linkml.experiment.tools import csv2nidm as csv2nidm_mod
+
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    # Patch out the session lookup to always return None.
+    monkeypatch.setattr(
+        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        csv2nidm_mod,
+        "match_acquistion_task_run_from_session",
+        lambda **kw: (None, None),
+    )
+
+    csv_path = _write_csv(
+        tmp_path,
+        "deriv.csv",
+        ["participant_id", "ses", "task", "run", "source_url", "metric"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d", 0.5]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    deriv = _write_software_metadata_csv(tmp_path)
+
+    project, cde, rows_added = csv2nidm_add_derivative_to_existing(
+        csv_file=str(csv_path),
+        nidm_file=str(existing),
+        derivative_file=str(deriv),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    assert rows_added == 0
+    # No Derivative was added.
+    from nidm.linkml.core.namespaces import NIDM as _NIDM
+    ders = list(project.graph.subjects(RDF.type, _NIDM["Derivative"]))
+    # Original file had no Derivatives either.
+    assert ders == []
+
+
+def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
+    """When the query helpers return a source acquisition, the row is
+    materialized as a Derivative + DerivativeObject linked via prov:used."""
+    from rdflib import URIRef
+    from nidm.linkml.experiment.tools import csv2nidm as csv2nidm_mod
+
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    fake_acq_activity = URIRef("http://example.org/source-acquisition")
+    fake_acq_entity = URIRef("http://example.org/source-entity")
+    monkeypatch.setattr(
+        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        csv2nidm_mod,
+        "match_acquistion_task_run_from_session",
+        lambda **kw: (fake_acq_entity, fake_acq_activity),
+    )
+
+    csv_path = _write_csv(
+        tmp_path,
+        "deriv.csv",
+        ["participant_id", "ses", "task", "run", "source_url", "metric"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d", 0.5]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    deriv = _write_software_metadata_csv(tmp_path)
+
+    project, cde, rows_added = csv2nidm_add_derivative_to_existing(
+        csv_file=str(csv_path),
+        nidm_file=str(existing),
+        derivative_file=str(deriv),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    assert rows_added == 1
+    g = project.graph
+
+    # The Derivative activity should exist.
+    from nidm.linkml.core.namespaces import NIDM as _NIDM
+    ders = list(g.subjects(RDF.type, _NIDM["Derivative"]))
+    assert len(ders) == 1
+    der = ders[0]
+
+    # prov:used should point at the mocked source acquisition activity.
+    assert (der, PROV.used, fake_acq_activity) in g
+
+    # source_url should land on the DerivativeObject via prov:Location.
+    dobjs = list(g.subjects(RDF.type, _NIDM["DerivativeObject"]))
+    assert len(dobjs) == 1
+    locations = list(g.objects(dobjs[0], PROV.Location))
+    assert any(
+        str(loc) == "http://example.org/d" for loc in locations
+    )
+
+
+def test_csv2nidm_main_derivative_with_no_match_short_circuits(
+    tmp_path: Path, monkeypatch
+):
+    """When -derivative produces no matched rows, the existing file
+    isn't rewritten."""
+    from nidm.linkml.experiment.tools import csv2nidm as csv2nidm_mod
+
+    existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
+    pre_mtime = existing.stat().st_mtime
+    monkeypatch.setattr(
+        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        csv2nidm_mod,
+        "match_acquistion_task_run_from_session",
+        lambda **kw: (None, None),
+    )
+
+    csv_path = _write_csv(
+        tmp_path,
+        "deriv.csv",
+        ["participant_id", "ses", "task", "run", "source_url"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d"]],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    deriv = _write_software_metadata_csv(tmp_path)
+
+    import time
+    time.sleep(0.05)
+    rc = csv2nidm_main(
+        [
+            "-csv", str(csv_path),
+            "-nidm", str(existing),
+            "-derivative", str(deriv),
+            "-json_map", str(json_map),
+            "-no_concepts",
+        ]
+    )
+    assert rc == 0
+    # File untouched.
+    assert existing.stat().st_mtime == pytest.approx(pre_mtime, abs=0.5)
