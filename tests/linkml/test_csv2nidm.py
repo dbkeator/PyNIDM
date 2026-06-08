@@ -615,7 +615,9 @@ def test_validate_derivative_input_columns_passes_with_required_cols():
 def test_validate_derivative_input_columns_exits_when_missing():
     import pandas as pd
 
-    df = pd.DataFrame(columns=["participant_id", "ses", "task"])  # missing run/source_url
+    df = pd.DataFrame(
+        columns=["participant_id", "ses", "task"]
+    )  # missing run/source_url
     with pytest.raises(SystemExit):
         _validate_derivative_input_columns(df)
 
@@ -624,7 +626,13 @@ def test_load_software_metadata_validates_columns(tmp_path: Path):
     valid = _write_software_metadata_csv(tmp_path)
     meta = _load_software_metadata(str(valid))
     assert list(meta.columns) == [
-        "title", "description", "version", "url", "cmdline", "platform", "ID",
+        "title",
+        "description",
+        "version",
+        "url",
+        "cmdline",
+        "platform",
+        "ID",
     ]
 
 
@@ -645,15 +653,18 @@ def test_load_software_metadata_rejects_missing_columns(tmp_path: Path):
 def test_create_software_agent_carries_metadata(tmp_path: Path):
     """The wrapper should expose the supplied title/version/cmdline/etc.
     as triples on its graph."""
+    from nidm.linkml.core.namespaces import SCHEMA
+    from nidm.linkml.experiment.project import Project as _Project
     from nidm.linkml.experiment.tools.csv2nidm import (
         _create_software_agent_for_derivative,
     )
-    from nidm.linkml.experiment.project import Project as _Project
-    from nidm.linkml.core.namespaces import SCHEMA
 
     project = _Project()
     meta_path = _write_software_metadata_csv(
-        tmp_path, title="FSL", version="6.0.5", cmdline="fsl_anat",
+        tmp_path,
+        title="FSL",
+        version="6.0.5",
+        cmdline="fsl_anat",
     )
     meta = _load_software_metadata(str(meta_path))
     agent = _create_software_agent_for_derivative(project, meta)
@@ -699,12 +710,12 @@ def test_csv2nidm_add_derivative_with_no_matching_acq_returns_zero(
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
     # Patch out the session lookup to always return None.
     monkeypatch.setattr(
-        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+        csv2nidm_mod, "find_session_for_subjectid", lambda *_a, **_kw: None
     )
     monkeypatch.setattr(
         csv2nidm_mod,
         "match_acquistion_task_run_from_session",
-        lambda **kw: (None, None),
+        lambda **_kw: (None, None),
     )
 
     csv_path = _write_csv(
@@ -727,6 +738,7 @@ def test_csv2nidm_add_derivative_with_no_matching_acq_returns_zero(
     assert rows_added == 0
     # No Derivative was added.
     from nidm.linkml.core.namespaces import NIDM as _NIDM
+
     ders = list(project.graph.subjects(RDF.type, _NIDM["Derivative"]))
     # Original file had no Derivatives either.
     assert ders == []
@@ -742,12 +754,12 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     fake_acq_activity = URIRef("http://example.org/source-acquisition")
     fake_acq_entity = URIRef("http://example.org/source-entity")
     monkeypatch.setattr(
-        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+        csv2nidm_mod, "find_session_for_subjectid", lambda *_a, **_kw: None
     )
     monkeypatch.setattr(
         csv2nidm_mod,
         "match_acquistion_task_run_from_session",
-        lambda **kw: (fake_acq_entity, fake_acq_activity),
+        lambda **_kw: (fake_acq_entity, fake_acq_activity),
     )
 
     csv_path = _write_csv(
@@ -772,6 +784,7 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
 
     # The Derivative activity should exist.
     from nidm.linkml.core.namespaces import NIDM as _NIDM
+
     ders = list(g.subjects(RDF.type, _NIDM["Derivative"]))
     assert len(ders) == 1
     der = ders[0]
@@ -783,9 +796,7 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     dobjs = list(g.subjects(RDF.type, _NIDM["DerivativeObject"]))
     assert len(dobjs) == 1
     locations = list(g.objects(dobjs[0], PROV.Location))
-    assert any(
-        str(loc) == "http://example.org/d" for loc in locations
-    )
+    assert any(str(loc) == "http://example.org/d" for loc in locations)
 
 
 def test_csv2nidm_main_derivative_with_no_match_short_circuits(
@@ -798,12 +809,12 @@ def test_csv2nidm_main_derivative_with_no_match_short_circuits(
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
     pre_mtime = existing.stat().st_mtime
     monkeypatch.setattr(
-        csv2nidm_mod, "find_session_for_subjectid", lambda *a, **kw: None
+        csv2nidm_mod, "find_session_for_subjectid", lambda *_a, **_kw: None
     )
     monkeypatch.setattr(
         csv2nidm_mod,
         "match_acquistion_task_run_from_session",
-        lambda **kw: (None, None),
+        lambda **_kw: (None, None),
     )
 
     csv_path = _write_csv(
@@ -816,13 +827,18 @@ def test_csv2nidm_main_derivative_with_no_match_short_circuits(
     deriv = _write_software_metadata_csv(tmp_path)
 
     import time
+
     time.sleep(0.05)
     rc = csv2nidm_main(
         [
-            "-csv", str(csv_path),
-            "-nidm", str(existing),
-            "-derivative", str(deriv),
-            "-json_map", str(json_map),
+            "-csv",
+            str(csv_path),
+            "-nidm",
+            str(existing),
+            "-derivative",
+            str(deriv),
+            "-json_map",
+            str(json_map),
             "-no_concepts",
         ]
     )

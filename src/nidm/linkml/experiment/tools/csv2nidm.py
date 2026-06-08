@@ -46,7 +46,7 @@ from ..utils import (
     redcap_datadictionary_to_json,
 )
 from ...core import constants as _C
-from ...core.namespaces import NFO, SIO
+from ...core.namespaces import NFO, PROV, SCHEMA, SIO
 
 __version__ = "0.3.0"  # Phase C: -derivative + software metadata
 _log = logging.getLogger(__name__)
@@ -451,9 +451,7 @@ def _load_software_metadata(derivative_path: str) -> pd.DataFrame:
     elif derivative_path.endswith(".tsv"):
         meta = pd.read_csv(derivative_path, sep="\t", engine="python")
     else:
-        print(
-            "ERROR: -derivative parameter must point at a .csv or .tsv file."
-        )
+        print("ERROR: -derivative parameter must point at a .csv or .tsv file.")
         sys.exit(1)
     missing = [c for c in _SOFTWARE_METADATA_REQUIRED if c not in meta.columns]
     if missing:
@@ -476,8 +474,8 @@ def find_session_for_subjectid(
     ``p`` (predicate) is ``bids:session_number`` and whose ``o``
     (object) matches *session_num*.
     """
-    from ...core import constants as _C
     from ..query import GetParticipantSessionsMetadata
+    from ...core import constants as _C
 
     if session_num is None:
         return None
@@ -575,14 +573,18 @@ def _create_software_agent_for_derivative(
     def _scalar(col):
         return software_metadata[col].to_string(index=False).strip()
 
-    return SoftwareAgent(
+    agent = SoftwareAgent(
         project,
         name=_scalar("title"),
         software_version=_scalar("version"),
         command=_scalar("cmdline"),
         runtime_platform=_scalar("platform"),
-        url=_scalar("url"),
     )
+    # url isn't a schema slot on SoftwareAgent; add it as a raw schema:url triple.
+    from rdflib import Literal as _Lit
+
+    agent.graph.add((agent.identifier, SCHEMA.url, _Lit(_scalar("url"))))
+    return agent
 
 
 def _materialize_derivative_row(
@@ -613,9 +615,7 @@ def _materialize_derivative_row(
     if run in ("nan", ""):
         run = None
 
-    derivative_session = find_session_for_subjectid(
-        session_num, subjectid, nidm_file
-    )
+    derivative_session = find_session_for_subjectid(session_num, subjectid, nidm_file)
     source_acq_entity, source_activity = match_acquistion_task_run_from_session(
         subject_id=subjectid,
         session_uuid=derivative_session,
@@ -632,9 +632,7 @@ def _materialize_derivative_row(
 
     # prov:used link from the derivative activity to the matched
     # source acquisition activity.
-    der.graph.add(
-        (der.identifier, PROV.used, source_activity)
-    )
+    der.graph.add((der.identifier, PROV.used, source_activity))
 
     # Add row metadata to the derivative entity.
     skipped_columns = {id_field, "ses", "task", "run", "subject_id", "source_url"}
@@ -694,9 +692,7 @@ def csv2nidm_add_derivative_to_existing(
     # Drop the derivative-required columns before running
     # map_variables_to_terms so it doesn't complain about un-annotated
     # ses/task/run/source_url columns.
-    df_for_mapping = df.drop(
-        columns=list(_DERIVATIVE_INPUT_REQUIRED), errors="ignore"
-    )
+    df_for_mapping = df.drop(columns=list(_DERIVATIVE_INPUT_REQUIRED), errors="ignore")
 
     out_dir = dirname(nidm_file)
     assessment_name = basename(csv_file)
