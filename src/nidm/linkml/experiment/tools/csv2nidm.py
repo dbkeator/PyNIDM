@@ -360,6 +360,12 @@ def csv2nidm_add_to_existing(
     )
 
     project = read_nidm(nidm_file)
+    # Re-bind canonical namespaces so wrapper CURIE expansion
+    # (e.g. `schema:name`) works regardless of what the file declared.
+    from ...core.namespaces import bind_default_namespaces
+
+    bind_default_namespaces(project.graph)
+
     subject_index = _query_subject_ids(project)
     rows_added = 0
     df_columns = list(df.columns)
@@ -745,6 +751,14 @@ def csv2nidm_add_derivative_to_existing(
     df_columns = list(df.columns)
 
     project = read_nidm(nidm_file)
+    # read_nidm binds defaults before parse; re-bind here so the
+    # canonical prefix set wins over any parse-time auto-assigned
+    # bindings (the SoftwareAgent wrapper expands `schema:name`
+    # CURIEs via this binding list).
+    from ...core.namespaces import bind_default_namespaces
+
+    bind_default_namespaces(project.graph)
+
     rows_added = 0
     for _, row in df.iterrows():
         if _materialize_derivative_row(
