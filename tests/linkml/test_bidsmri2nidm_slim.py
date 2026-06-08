@@ -39,6 +39,8 @@ from nidm.linkml.experiment.tools.bidsmri2nidm import (
     bidsmri2project,
     main,
 )
+from nidm.linkml.core import bids_constants as BIDS_Constants
+from nidm.linkml.core import constants as _C
 
 # AssessmentObject is typed onli:assessment-instrument in the wrapper.
 _ASSESSMENT_OBJECT_TYPE = ONLI["assessment-instrument"]
@@ -838,3 +840,129 @@ def test_phase_d_without_args_is_no_op(tmp_path: Path):
     aos = list(g.subjects(RDF.type, _ASSESSMENT_OBJECT_TYPE))
     assert len(aos) == 1
     assert isinstance(cde, Graph)
+
+
+# ---------------------------------------------------------------------------
+# Phase E: func events.tsv + DWI bval/bvec (pybids-driven discovery)
+# ---------------------------------------------------------------------------
+
+
+def _write_bold_with_events(
+    bids_root: Path,
+    subject: str = "sub-01",
+    task: str = "rest",
+    sidecar: dict = None,
+):
+    """Write a func bold scan + its JSON sidecar + paired events.tsv."""
+    func = bids_root / subject / "func"
+    func.mkdir(parents=True, exist_ok=True)
+    bold = func / f"{subject}_task-{task}_bold.nii.gz"
+    bold.write_bytes(b"fake bold content")
+    (func / f"{subject}_task-{task}_bold.json").write_text(
+        json.dumps(sidecar if sidecar is not None else {"TaskName": task})
+    )
+    events = func / f"{subject}_task-{task}_events.tsv"
+    events.write_text("onset\tduration\ttrial_type\n0\t1\tA\n")
+    return bold, events
+
+
+def _write_dwi_with_bval_bvec(
+    bids_root: Path, subject: str = "sub-01", extra_bvec_variants: bool = False
+):
+    """Write a DWI scan + paired .bval/.bvec (and optional ABIDE2-style
+    .bvec_absolute / .bvec_image variants that pybids won't return)."""
+    dwi = bids_root / subject / "dwi"
+    dwi.mkdir(parents=True, exist_ok=True)
+    scan = dwi / f"{subject}_dwi.nii.gz"
+    scan.write_bytes(b"fake dwi content")
+    (dwi / f"{subject}_dwi.bval").write_text("0 1000 1000\n")
+    (dwi / f"{subject}_dwi.bvec").write_text("1 0 0\n0 1 0\n0 0 1\n")
+    if extra_bvec_variants:
+        (dwi / f"{subject}_dwi.bvec_absolute").write_text("1 0 0\n")
+        (dwi / f"{subject}_dwi.bvec_image").write_text("0 1 0\n")
+    return scan
+
+
+def test_func_events_creates_bold_events_object(tmp_path: Path):
+    """A func bold scan with a paired events.tsv emits a
+    nidm:StimulusResponseFile object carrying the task name."""
+    _write_dataset_description(tmp_path)
+    _write_bold_with_events(tmp_path)
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    events = list(g.subjects(RDF.type, _C.NIDM_MRI_BOLD_EVENTS))
+    assert len(events) == 1
+    tasknames = list(g.objects(events[0], BIDS_Constants.json_keys["TaskName"]))
+    assert tasknames and str(tasknames[0]) == "rest"
+
+
+def test_func_events_linked_to_bold_via_was_attributed_to(tmp_path: Path):
+    """The events object points at its bold scan via prov:wasAttributedTo."""
+    _write_dataset_description(tmp_path)
+    _write_bold_with_events(tmp_path)
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    events_obj = list(g.subjects(RDF.type, _C.NIDM_MRI_BOLD_EVENTS))[0]
+    attributed = list(g.objects(events_obj, PROV.wasAttributedTo))
+    assert len(attributed) == 1
+    # The target is the functional MRObject (a nidm:AcquisitionObject).
+    assert (attributed[0], RDF.type, NIDM.AcquisitionObject) in g
+
+
+def test_func_events_object_is_collection_member(tmp_path: Path):
+    """The events object is linked into the BIDS Dataset collection."""
+    _write_dataset_description(tmp_path)
+    _write_bold_with_events(tmp_path)
+
+    project, collection, _, _ = bidsmri2project(tmp_path)
+    g = project.graph
+
+    events_obj = list(g.subjects(RDF.type, _C.NIDM_MRI_BOLD_EVENTS))[0]
+    members = list(g.objects(collection.identifier, PROV.hadMember))
+    assert events_obj in members
+
+
+def test_dwi_creates_bval_and_bvec_objects(tmp_path: Path):
+    """A DWI scan with paired .bval/.bvec emits one typed object each."""
+    _write_dataset_description(tmp_path)
+    _write_dwi_with_bval_bvec(tmp_path)
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    bvals = list(g.subjects(RDF.type, BIDS_Constants.scans["bval"]))
+    bvecs = list(g.subjects(RDF.type, BIDS_Constants.scans["bvec"]))
+    assert len(bvals) == 1
+    assert len(bvecs) == 1
+
+
+def test_dwi_bvec_variants_discovered_via_filesystem_walk(tmp_path: Path):
+    """The bvec filesystem walk captures .bvec plus the ABIDE2-style
+    .bvec_absolute / .bvec_image variants pybids won't return."""
+    _write_dataset_description(tmp_path)
+    _write_dwi_with_bval_bvec(tmp_path, extra_bvec_variants=True)
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    bvecs = list(g.subjects(RDF.type, BIDS_Constants.scans["bvec"]))
+    assert len(bvecs) == 3
+
+
+def test_dwi_bval_bvec_are_collection_members(tmp_path: Path):
+    """bval/bvec objects are linked into the BIDS Dataset collection."""
+    _write_dataset_description(tmp_path)
+    _write_dwi_with_bval_bvec(tmp_path)
+
+    project, collection, _, _ = bidsmri2project(tmp_path)
+    g = project.graph
+
+    members = set(g.objects(collection.identifier, PROV.hadMember))
+    bval = list(g.subjects(RDF.type, BIDS_Constants.scans["bval"]))[0]
+    bvec = list(g.subjects(RDF.type, BIDS_Constants.scans["bvec"]))[0]
+    assert bval in members
+    assert bvec in members

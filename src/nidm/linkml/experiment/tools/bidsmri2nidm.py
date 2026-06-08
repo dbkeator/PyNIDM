@@ -72,7 +72,7 @@ from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, NFO, PROV, RDFS, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.5.0"  # Phase D: CDE attachment for participants.tsv columns
+__version__ = "0.6.0"  # Phase E: pybids discovery + events.tsv + DWI bval/bvec
 _log = logging.getLogger(__name__)
 
 
@@ -740,72 +740,221 @@ def _process_scan_file(
         _maybe_apply_root_level_json(obj, directory, root_json, img_session)
 
 
+def _emit_run_entity(obj, entities: dict) -> None:
+    """Emit the BIDS run-index triple when the scan carries a run entity."""
+    run = entities.get("run")
+    if run is not None:
+        obj.graph.add((obj.identifier, BIDS_Constants.json_keys["run"], _lit(run)))
+
+
+def _derive_events_path(bold_path: Path) -> Path:
+    """Map a ``*_bold.nii[.gz]`` path to its sibling ``*_events.tsv``."""
+    name = bold_path.name
+    for ext in (".nii.gz", ".nii"):
+        if name.endswith(ext):
+            stem = name[: -len(ext)]
+            break
+    else:
+        stem = bold_path.stem
+    if stem.endswith("_bold"):
+        stem = stem[: -len("_bold")]
+    return bold_path.with_name(stem + "_events.tsv")
+
+
+def _find_events_file(bids_layout, file_tpl, bold_path: Path) -> Optional[Path]:
+    """Locate the events.tsv paired with a bold scan.
+
+    Tries pybids first (querying by task/run/session); falls back to
+    deriving the canonical ``*_events.tsv`` sibling filename if pybids
+    returns nothing (or its kwargs drift across versions).
+    """
+    entities = file_tpl.entities
+    task = entities.get("task")
+    if task is None:
+        return None
+    get_kwargs = {
+        "subject": entities.get("subject"),
+        "datatype": "func",
+        "suffix": "events",
+        "task": task,
+        "extension": [".tsv"],
+    }
+    if entities.get("session") is not None:
+        get_kwargs["session"] = entities["session"]
+    if entities.get("run") is not None:
+        get_kwargs["run"] = entities["run"]
+    try:
+        hits = bids_layout.get(**get_kwargs)
+    except Exception:  # pragma: no cover - guards pybids kwarg drift
+        hits = []
+    if hits:
+        return Path(hits[0].path)
+    derived = _derive_events_path(bold_path)
+    return derived if derived.is_file() else None
+
+
+def _attach_events_file(
+    bids_layout, file_tpl, acq, bold_obj, collection, directory, bids_root
+) -> None:
+    """Discover the events.tsv for a func bold scan and emit a
+    ``nidm:StimulusResponseFile`` AcquisitionObject linked to the bold
+    scan via ``prov:wasAttributedTo`` (matches legacy behavior)."""
+    from ...core import constants as _C
+
+    bold_path = Path(file_tpl.path)
+    events_path = _find_events_file(bids_layout, file_tpl, bold_path)
+    if events_path is None:
+        return
+
+    # TaskName: prefer the bold sidecar's value, fall back to the task entity.
+    metadata = _load_sidecar_metadata(bold_path)
+    task_name = metadata.get("TaskName", file_tpl.entities.get("task"))
+
+    events_obj = AcquisitionObject(
+        acq, filename=_bids_filename(events_path, bids_root)
+    )
+    events_obj.graph.add((events_obj.identifier, RDF.type, _C.NIDM_MRI_BOLD_EVENTS))
+    events_obj.graph.add(
+        (events_obj.identifier, BIDS_Constants.json_keys["TaskName"], _lit(task_name))
+    )
+    events_obj.graph.add(
+        (events_obj.identifier, PROV.wasAttributedTo, bold_obj.identifier)
+    )
+    _add_collection_member(collection, events_obj)
+    num_sources = add_git_annex_sources(
+        obj=events_obj, filepath=str(events_path), bids_root=str(bids_root)
+    )
+    if num_sources == 0:
+        events_obj.graph.add(
+            (events_obj.identifier, PROV["Location"], _lit("file:/" + str(events_path)))
+        )
+
+
+def _attach_bval_file(
+    bids_layout, file_tpl, acq, collection, directory, bids_root
+) -> None:
+    """Attach the ``.bval`` paired with a DWI scan, discovered via
+    pybids ``get_bval`` (matches legacy behavior)."""
+    try:
+        bval_name = bids_layout.get_bval(file_tpl.path)
+    except Exception as e:  # pragma: no cover - depends on pybids/data
+        _log.warning("BVAL file missing for %s: %s", file_tpl.path, e)
+        return
+    if not bval_name:
+        return
+    bval_path = Path(bval_name)
+    if not bval_path.is_absolute():
+        bval_path = Path(file_tpl.dirname) / bval_path.name
+
+    bval_obj = AcquisitionObject(acq, filename=_bids_filename(bval_path, bids_root))
+    bval_obj.graph.add((bval_obj.identifier, RDF.type, BIDS_Constants.scans["bval"]))
+    _add_collection_member(collection, bval_obj)
+    add_git_annex_sources(
+        obj=bval_obj, filepath=str(bval_path), bids_root=str(bids_root)
+    )
+    _emit_sha512_triple(bval_obj, bval_path, bids_root)
+
+
+def _attach_bvec_files(file_tpl, acq, collection, directory, bids_root) -> None:
+    """Attach ``.bvec`` files paired with a DWI scan.
+
+    Bypasses pybids on purpose: some datasets (e.g. ABIDE2) ship
+    ``*.bvec_absolute`` / ``*.bvec_image`` variants that pybids won't
+    return, so we discover them with a filesystem walk of the scan's
+    directory (matches legacy behavior).
+    """
+    base_filename = file_tpl.filename
+    for ext in (".nii.gz", ".nii"):
+        if base_filename.endswith(ext):
+            base_filename = base_filename[: -len(ext)]
+            break
+    parent_dir = file_tpl.dirname
+    try:
+        candidates = os.listdir(parent_dir)
+    except OSError as e:  # pragma: no cover - defensive
+        _log.warning("Cannot list %s for bvec discovery: %s", parent_dir, e)
+        return
+
+    for bvec_fn in sorted(candidates):
+        if not (bvec_fn.startswith(base_filename) and "bvec" in bvec_fn):
+            continue
+        full_bvec_path = Path(parent_dir) / bvec_fn
+        bvec_obj = AcquisitionObject(
+            acq, filename=_bids_filename(full_bvec_path, bids_root)
+        )
+        bvec_obj.graph.add(
+            (bvec_obj.identifier, RDF.type, BIDS_Constants.scans["bvec"])
+        )
+        _add_collection_member(collection, bvec_obj)
+        add_git_annex_sources(
+            obj=bvec_obj, filepath=str(full_bvec_path), bids_root=str(bids_root)
+        )
+        _emit_sha512_triple(bvec_obj, full_bvec_path, bids_root)
+
+
 def addimagingsessions(
-    subject_id: str,
-    session: Session,
-    persons_by_subj: Dict[str, Person],
+    bids_layout,
     bare_id: str,
+    session: Session,
+    person: Person,
     directory: str,
     bids_root: Path,
     collection: Collection,
-    project: Project,
     img_session: Optional[str] = None,
 ) -> None:
-    """Walk *subject_id*'s BIDS directory and emit one
-    ``MRAcquisition``/``PETAcquisition`` per scan file, fully
-    populated with sidecar metadata.
+    """Emit one ``MRAcquisition``/``PETAcquisition`` per imaging file for
+    *bare_id*, using pybids ``BIDSLayout`` for scan discovery + metadata.
 
-    Reuses the per-subject ``Person`` from *persons_by_subj* when
-    available; creates a fresh one otherwise.
+    Layers per-scan attributes (contrast/usage, sha512, git-annex,
+    sidecar + root-level JSON) onto each AcquisitionObject, then attaches
+    events.tsv objects for func scans and bval/bvec objects for dwi scans.
     """
-    subject_dir = bids_root / subject_id
-    if not subject_dir.is_dir():
-        return
+    get_kwargs = {"subject": bare_id, "extension": [".nii", ".nii.gz"]}
+    if img_session is not None:
+        get_kwargs["session"] = img_session
 
-    person = persons_by_subj.get(bare_id)
-    if person is None:
-        person = Person(project, subject_id=subject_id)
-        persons_by_subj[bare_id] = person
-
-    for modality_dir in sorted(subject_dir.iterdir()):
-        if not modality_dir.is_dir():
+    for file_tpl in bids_layout.get(**get_kwargs):
+        entities = file_tpl.entities
+        datatype = entities.get("datatype")
+        suffix = entities.get("suffix")
+        if datatype is None or suffix is None:
             continue
-        modality_name = modality_dir.name
-        if modality_name not in _DIRECTORY_TO_MODALITY:
-            continue
-        modality = _DIRECTORY_TO_MODALITY[modality_name]
-        image_usage = _DIRECTORY_TO_USAGE.get(modality_name)
+        scan_path = Path(file_tpl.path)
+        filename = _bids_filename(scan_path, bids_root)
 
-        for scan_path in sorted(modality_dir.iterdir()):
-            if not scan_path.is_file():
-                continue
-            suffix = _suffix_from_filename(scan_path.name)
-            if suffix is None:
-                continue
-
-            if modality == "PET":
-                acq = PETAcquisition(session)
-                obj = PETObject(acq, filename=_bids_filename(scan_path, bids_root))
-            else:
-                acq = MRAcquisition(session)
-                contrast = _SUFFIX_TO_CONTRAST.get(suffix)
-                obj = MRObject(
-                    acq,
-                    filename=_bids_filename(scan_path, bids_root),
-                    image_contrast_type=contrast,
-                    image_usage_type=image_usage,
-                )
-            acq.add_qualified_association(person, role=SIO.Subject)
-            _add_collection_member(collection, obj)
-            _process_scan_file(
-                scan_path=scan_path,
-                modality_name=modality_name,
-                acq=acq,
-                obj=obj,
-                directory=directory,
-                bids_root=bids_root,
-                img_session=img_session,
+        if _DIRECTORY_TO_MODALITY.get(datatype) == "PET":
+            acq = PETAcquisition(session)
+            obj = PETObject(acq, filename=filename)
+        else:
+            acq = MRAcquisition(session)
+            obj = MRObject(
+                acq,
+                filename=filename,
+                image_contrast_type=_SUFFIX_TO_CONTRAST.get(suffix),
+                image_usage_type=_DIRECTORY_TO_USAGE.get(datatype),
             )
+        acq.add_qualified_association(person, role=SIO.Subject)
+        _add_collection_member(collection, obj)
+        _process_scan_file(
+            scan_path=scan_path,
+            modality_name=datatype,
+            acq=acq,
+            obj=obj,
+            directory=directory,
+            bids_root=bids_root,
+            img_session=img_session,
+        )
+        _emit_run_entity(obj, entities)
+
+        if datatype == "func":
+            _attach_events_file(
+                bids_layout, file_tpl, acq, obj, collection, directory, bids_root
+            )
+        elif datatype == "dwi":
+            _attach_bval_file(
+                bids_layout, file_tpl, acq, collection, directory, bids_root
+            )
+            _attach_bvec_files(file_tpl, acq, collection, directory, bids_root)
 
 
 def bidsmri2project(
@@ -878,38 +1027,68 @@ def bidsmri2project(
         )
 
     # ------------------------------------------------------------------
-    # Phase C -- per-subject image walk via addimagingsessions.
-    # Reuses Session/Person from participants.tsv when present, creates
-    # fresh ones from the filesystem when participants.tsv is absent or
-    # doesn't cover all subjects.
+    # Phase C/E -- per-subject image walk via addimagingsessions, using
+    # pybids BIDSLayout for scan discovery + metadata (the hybrid design:
+    # pybids drives discovery; the bvec walk inside addimagingsessions is
+    # the deliberate exception).  Reuses Session/Person from
+    # participants.tsv when present, creates fresh ones otherwise.
     # ------------------------------------------------------------------
-    for subject_dir in sorted(bids_root.glob("sub-*")):
-        if not subject_dir.is_dir():
-            continue
-        subject_id = subject_dir.name  # "sub-01"
-        bare_id = (
-            subject_id.removeprefix("sub-")
-            if hasattr(str, "removeprefix")
-            else subject_id[4:]
-        )
-        if subject_filter is not None and bare_id != subject_filter:
-            continue
+    import bids
 
-        session = sessions_by_subj.get(bare_id)
-        if session is None:
-            session = Session(project)
-            sessions_by_subj[bare_id] = session
+    try:  # pragma: no cover - option removed in newer pybids
+        bids.config.set_option("extension_initial_dot", True)
+    except Exception:
+        pass
+    bids_layout = bids.BIDSLayout(directory, validate=False)
 
-        addimagingsessions(
-            subject_id=subject_id,
-            session=session,
-            persons_by_subj=persons_by_subj,
-            bare_id=bare_id,
-            directory=directory,
-            bids_root=bids_root,
-            collection=collection,
-            project=project,
-        )
+    if subject_filter is not None:
+        subjects_to_process = [subject_filter]
+    else:
+        subjects_to_process = bids_layout.get_subjects()
+
+    for bare_id in sorted(subjects_to_process):
+        if bare_id.startswith("."):  # skip .git etc. (datalad datasets)
+            continue
+        subject_id = "sub-" + bare_id
+
+        person = persons_by_subj.get(bare_id)
+        if person is None:
+            person = Person(project, subject_id=subject_id)
+            persons_by_subj[bare_id] = person
+
+        imaging_sessions = bids_layout.get_sessions(subject=bare_id)
+        if imaging_sessions:
+            # ses-* directories: each imaging session is its own Session,
+            # carrying the BIDS session number (matches legacy).
+            for img_session in imaging_sessions:
+                ses = Session(project)
+                ses.graph.add(
+                    (ses.identifier, BIDS["session_number"], _lit(img_session))
+                )
+                addimagingsessions(
+                    bids_layout=bids_layout,
+                    bare_id=bare_id,
+                    session=ses,
+                    person=person,
+                    directory=directory,
+                    bids_root=bids_root,
+                    collection=collection,
+                    img_session=img_session,
+                )
+        else:
+            session = sessions_by_subj.get(bare_id)
+            if session is None:
+                session = Session(project)
+                sessions_by_subj[bare_id] = session
+            addimagingsessions(
+                bids_layout=bids_layout,
+                bare_id=bare_id,
+                session=session,
+                person=person,
+                directory=directory,
+                bids_root=bids_root,
+                collection=collection,
+            )
 
     return project, collection, cde, cde_pheno
 
