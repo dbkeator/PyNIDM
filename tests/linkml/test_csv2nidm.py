@@ -721,8 +721,8 @@ def test_csv2nidm_add_derivative_with_no_matching_acq_returns_zero(
     csv_path = _write_csv(
         tmp_path,
         "deriv.csv",
-        ["participant_id", "ses", "task", "run", "source_url", "metric"],
-        [["sub-01", "1", "rest", "1", "http://example.org/d", 0.5]],
+        ["participant_id", "ses", "task", "run", "source_url", "age"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
     deriv = _write_software_metadata_csv(tmp_path)
@@ -765,8 +765,8 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     csv_path = _write_csv(
         tmp_path,
         "deriv.csv",
-        ["participant_id", "ses", "task", "run", "source_url", "metric"],
-        [["sub-01", "1", "rest", "1", "http://example.org/d", 0.5]],
+        ["participant_id", "ses", "task", "run", "source_url", "age"],
+        [["sub-01", "1", "rest", "1", "http://example.org/d", 25]],
     )
     json_map = _build_covering_json_map(tmp_path, csv_path)
     deriv = _write_software_metadata_csv(tmp_path)
