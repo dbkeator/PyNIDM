@@ -4,8 +4,10 @@ A walkthrough of the new schema-driven, RDFLib-native PyNIDM
 architecture for developers who want to maintain, extend, or just
 understand the codebase.
 
-**Snapshot:** 2026-05-28, branch `linkml-refactor`, HEAD `13a63b7`,
-660 tests passing.
+**Snapshot:** 2026-06-08, branch `linkml-refactor`, HEAD `876a371`,
+642 tests passing, 1 skipped.  (As of `a56d07a` this count is
+deterministic across machines; `test_parity.py` now parametrizes only
+over repo-tracked fixtures — see section 10.)
 
 > **Status note.**  This manual covers the *new* (LinkML/RDFLib)
 > implementation in `src/nidm/linkml/`.  The *legacy* implementation
@@ -526,7 +528,7 @@ def test_constructs_and_emits_type():
 
 ## 10. Testing patterns
 
-### Patterns banked from the existing 660-test suite
+### Patterns banked from the existing test suite
 
 - **`_FakeArgs`**: a minimal namespace-shaped class for testing
   argparse-coupled code without hand-rolling argv.  Used in
@@ -554,6 +556,25 @@ def test_constructs_and_emits_type():
   uses a CSV column not in BIDS_Constants, the test must supply a
   json_map covering it, or `map_variables_to_terms` falls back to
   `annotate_data_element` which calls `input()` and the test hangs.
+
+### Parity fixtures and a deterministic test count
+
+`tests/linkml/test_parity.py` parametrizes 4 round-trip tests over the
+`FIXTURE_PATHS` list (plus 1 inventory test), so it contributes 4×N + 1
+tests for N fixtures.  Historically that list pointed at NIDM `.ttl`
+files under `fmriprep_example/` and `hatton_linear_reg/` that were **not
+tracked in git**; `_available_fixtures()` silently skips anything not on
+disk, so the collected count drifted between clones (652-660) depending
+on which fixtures happened to be present.
+
+As of `a56d07a`, `FIXTURE_PATHS` is trimmed to the 4 repo-tracked
+fixtures, fixing parity at 17 tests (4×4 + 1) on every machine.  If you
+want to stress-test the round-trip path against your own datasets, drop
+extra `.ttl` files into `tests/linkml/local_fixtures/` — that directory
+is gitignored and auto-globbed into `FIXTURE_PATHS`, so it raises your
+local count without affecting anyone else's.  When you add a new
+*shared* fixture, add it to `FIXTURE_PATHS` **and commit the file**, then
+bump the expected count in this manual and TRANSFER.md.
 
 ### Running tests
 
@@ -673,5 +694,5 @@ def foo(
 
 ---
 
-*Last updated: 2026-05-28.  When this manual gets stale, update the
+*Last updated: 2026-06-08.  When this manual gets stale, update the
 HEAD commit hash at the top and the gotchas list.*

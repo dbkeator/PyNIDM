@@ -1,7 +1,8 @@
 # Laptop transfer — PyNIDM LinkML refactor
 
 How to pick up the `linkml-refactor` work on a fresh machine.  Snapshot
-date: 2026-05-28.  Branch HEAD: `13a63b7`.  Tests: 660 passing, 1 skipped.
+date: 2026-06-08.  Branch HEAD: `876a371`.  Tests: 642 passing, 1 skipped
+(deterministic across machines as of `a56d07a` — see "Verify the setup").
 
 ---
 
@@ -13,7 +14,11 @@ git clone git@github.com:incf-nidash/PyNIDM.git
 cd PyNIDM
 git checkout linkml-refactor
 
-# 2. create the conda env that the work was done in
+# 2. activate (or create) the conda env for this work
+#    Existing laptops use one of these, depending on the machine:
+#      - nidm_test_clean  (Python 3.9)
+#      - pynidm_v3        (Python 3.12)
+#    On a fresh machine, create one (either Python version works):
 conda create -n nidm_test_clean python=3.9 -y
 conda activate nidm_test_clean
 
@@ -28,8 +33,9 @@ pytest tests/linkml/ -x
 pre-commit run --all-files
 ```
 
-Expected result: **660 tests passing, 1 skipped, ~5 minutes total
-runtime, pre-commit fully green.**
+Expected result: **642 tests passing, 1 skipped, ~3-5 minutes total
+runtime, pre-commit fully green.**  (As of `a56d07a` the count is
+deterministic across machines — see "Verify the setup".)
 
 ---
 
@@ -61,7 +67,15 @@ git pull origin linkml-refactor
 
 ### 2. Recreate the conda env
 
-The work was done in `nidm_test_clean` with Python 3.9.23.  Match that:
+The env depends on which laptop you're on — it's either `nidm_test_clean`
+(Python 3.9.23) or `pynidm_v3` (Python 3.12.11).  Both run the suite
+green.  Activate whichever exists:
+
+```bash
+conda activate nidm_test_clean   # or: conda activate pynidm_v3
+```
+
+On a fresh machine, create one (either Python version works):
 
 ```bash
 conda create -n nidm_test_clean python=3.9 -y
@@ -115,7 +129,25 @@ selectors / which directories to ignore) lives in `tox.ini` under
 pytest tests/linkml/ -x
 ```
 
-Expected: **660 passed, 1 skipped, ~5 min**.
+Expected: **642 passed, 1 skipped, ~3-5 min**.
+
+Parity-test count is now deterministic (as of `a56d07a`).
+`tests/linkml/test_parity.py` parametrizes 4 round-trip tests over a
+curated `FIXTURE_PATHS` list, plus 1 inventory test (so 4×N + 1 parity
+tests for N fixtures).  Earlier that list referenced NIDM `.ttl` files
+under `fmriprep_example/` and `hatton_linear_reg/` that were **not
+tracked in git**, so the collected count drifted between clones (652-660
+depending on how many fixtures happened to be present).  `FIXTURE_PATHS`
+was trimmed to the 4 repo-tracked fixtures, giving a fixed 17 parity
+tests (4×4 + 1) on every machine.  To stress-test against personal
+datasets, drop extra `.ttl` files into `tests/linkml/local_fixtures/`
+(gitignored) and they're picked up automatically — they'll raise your
+local count but won't affect anyone else's.
+
+Note: pytest reads `pytest.ini` (which sets the pyparsing warning
+filter) and intentionally ignores the `[pytest]` block in `tox.ini` —
+you'll see a one-line "ignoring pytest config in tox.ini" notice, which
+is expected.
 
 The 1 skip is `test_read_nidm_round_trip_isomorphic` in
 `tests/linkml/test_utils_chunk4.py` — it's gated on a curated NIDM
@@ -148,7 +180,7 @@ PyNIDM/
 │   │   └── generated/               #   ↳ gen-pydantic output from the schema
 │   ├── core/                        # LEGACY Constants / BIDS_Constants
 │   └── workflows/                   # LEGACY (NIDM-Statistics); NOT YET PORTED (task 10)
-├── tests/linkml/                    # NEW test suite (660 tests)
+├── tests/linkml/                    # NEW test suite (642 tests)
 ├── scripts/                         # regen_schema.py + smoketest helpers
 ├── TRANSFER.md                      # this file
 ├── docs/DEVELOPER_MANUAL.md         # codebase walkthrough
