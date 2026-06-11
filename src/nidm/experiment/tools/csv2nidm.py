@@ -964,11 +964,14 @@ def csv2nidm_main(args=None):
             # re-read data file with constraint that key field is read as string
             df = pd.read_csv(args.csv_file, dtype={id_field: str})
 
-        # add namespace for derived data software
-        project.addNamespace(
-            project.safe_string(software_metadata["title"].to_string(index=False)),
-            software_metadata["url"].to_string(index=False),
-        )
+        # add namespace for derived data software.  software_metadata is
+        # only defined when -derivative is supplied, so guard this block;
+        # without the guard a plain CSV->NIDM run raises UnboundLocalError.
+        if args.derivative:
+            project.addNamespace(
+                project.safe_string(software_metadata["title"].to_string(index=False)),
+                software_metadata["url"].to_string(index=False),
+            )
 
         # get namespaces from document for use later....
         rdfs_ns = project.find_namespace_with_uri(
@@ -1164,7 +1167,7 @@ def csv2nidm_main(args=None):
                 )
 
                 # store other data from row with columns_to_term mappings
-                for row_variable, row_data in csv_row.iteritems():
+                for row_variable, row_data in csv_row.items():
                     if not row_data:
                         continue
 
