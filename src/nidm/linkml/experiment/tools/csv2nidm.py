@@ -318,14 +318,29 @@ def _attach_csv_row_to_existing_project(
     *project* for *df_row*, linking the new acquisition to the existing
     *person_uri* via ``add_qualified_association`` on the wrapper.
     """
-    from rdflib import Literal as _Lit
-
     session = Session(project)
     acq = AssessmentAcquisition(session=session)
     acq_entity = AssessmentObject(acquisition=acq)
     acq_entity.graph.add(
-        (acq_entity.identifier, NFO.filename, _Lit(basename(csv_file_path)))
+        (acq_entity.identifier, NFO.filename, Literal(basename(csv_file_path)))
     )
+
+    # git-annex sources, or a prov:Location fallback pointing at the CSV
+    # on disk (matches legacy -nidm assessment-object provenance).
+    n_sources = add_git_annex_sources(
+        obj=acq_entity,
+        filepath=csv_file_path,
+        bids_root=dirname(csv_file_path) or ".",
+    )
+    if n_sources == 0:
+        acq_entity.graph.add(
+            (
+                acq_entity.identifier,
+                PROV.Location,
+                Literal("file:/" + csv_file_path, datatype=XSD.string),
+            )
+        )
+
     # Link the new acquisition to the existing Person via a Person
     # wrapper.from_existing_subject so the qualifiedAssociation lands.
     existing_person = Person.from_existing_subject(project.graph, person_uri)
@@ -433,7 +448,9 @@ def _write_existing_nidm_back(
     rdf_graph = rdf_graph + cde
     rdf_graph = add_export_provenance(
         rdf_graph=rdf_graph,
-        collection=None,
+        # legacy -nidm links the export activity's prov:used back to the
+        # project that was read in (not a fresh collection).
+        collection=project,
         outputfile=nidm_file,
         pynidm_version=_pynidm_version(),
         tool_version=__version__,
