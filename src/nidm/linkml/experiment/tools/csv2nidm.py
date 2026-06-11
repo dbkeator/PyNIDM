@@ -31,6 +31,7 @@ from rdflib import Graph
 from .bidsmri2nidm import _pynidm_version, _runtime_platform  # reuse from bidsmri2nidm
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
+from ..collection import Collection
 from ..derivative import Derivative
 from ..derivative_object import DerivativeObject
 from ..person import Person
@@ -40,6 +41,7 @@ from ..software_agent import SoftwareAgent
 from ..utils import (
     add_attributes_with_cde,
     add_export_provenance,
+    add_git_annex_sources,
     csv_dd_to_json_dd,
     map_variables_to_terms,
     read_nidm,
@@ -47,6 +49,8 @@ from ..utils import (
 )
 from ...core import constants as _C
 from ...core.namespaces import NFO, PROV, SCHEMA, SIO
+from rdflib import RDF, Literal
+from rdflib.namespace import XSD
 
 __version__ = "0.3.0"  # Phase C: -derivative + software metadata
 _log = logging.getLogger(__name__)
@@ -158,24 +162,41 @@ def _materialize_row(
     id_field: Optional[str],
     assessment_name: str,  # noqa: U100 -- reserved for DD-key derivation in Phase B
     csv_file_path: str,
-) -> None:
+) -> AssessmentObject:
     """Emit one Session + AssessmentAcquisition + AssessmentObject + Person
     for *df_row* and attach a CDE-style attribute triple for each cell.
 
     *id_field* is the column carrying the participant identifier; when
     None, no Person is created and the per-row data still lands on its
     own AssessmentObject (matches the legacy fall-through path).
+
+    Returns the AssessmentObject so the caller can link it into the
+    project-level ``prov:Collection`` via ``prov:hadMember``.
     """
     session = Session(project)
     acq = AssessmentAcquisition(session=session)
     acq_entity = AssessmentObject(acquisition=acq)
 
     # nfo:filename on the assessment entity -> the CSV file.
-    from rdflib import Literal as _Lit
-
     acq_entity.graph.add(
-        (acq_entity.identifier, NFO.filename, _Lit(basename(csv_file_path)))
+        (acq_entity.identifier, NFO.filename, Literal(basename(csv_file_path)))
     )
+
+    # git-annex sources, or a prov:Location fallback pointing at the CSV
+    # on disk (matches legacy assessment-object provenance).
+    n_sources = add_git_annex_sources(
+        obj=acq_entity,
+        filepath=csv_file_path,
+        bids_root=dirname(csv_file_path) or ".",
+    )
+    if n_sources == 0:
+        acq_entity.graph.add(
+            (
+                acq_entity.identifier,
+                PROV.Location,
+                Literal("file:/" + csv_file_path, datatype=XSD.string),
+            )
+        )
 
     person: Optional[Person] = None
     if id_field is not None and id_field in df_columns:
@@ -193,6 +214,8 @@ def _materialize_row(
             obj=acq_entity, cde=cde, row_variable=column, value=value
         )
 
+    return acq_entity
+
 
 # ---------------------------------------------------------------------------
 # Serialization helper
@@ -203,7 +226,7 @@ def _write_nidm_graph(
     project: Project,
     cde: Graph,
     output_file: str,
-    activity_label: str = "Add CSV data to NIDM file",
+    activity_label: str = "Create NIDM RDF from CSV data",
 ) -> None:
     """Serialize the union (project + cde) to *output_file*.
 
@@ -218,9 +241,13 @@ def _write_nidm_graph(
 
     _log.info("Writing NIDM file %s ....", output_file)
 
+    # The export activity records prov:used -> the project-level
+    # prov:Collection (the CSV-data collection) when one is present.
+    collection = next(rdf_graph.subjects(RDF.type, PROV.Collection), None)
+
     rdf_graph = add_export_provenance(
         rdf_graph=rdf_graph,
-        collection=None,
+        collection=collection,
         outputfile=output_file,
         pynidm_version=_pynidm_version(),
         tool_version=__version__,
@@ -815,21 +842,36 @@ def csv2nidm_project(
     if id_field is None:
         id_field = detect_idfield(column_to_terms) if column_to_terms else None
 
+    # Re-read the id column as a string so zero-padded subject ids
+    # (e.g. "0050001") aren't silently coerced to ints (matches legacy).
+    if id_field is not None:
+        if csv_file.endswith(".tsv"):
+            df = pd.read_csv(
+                csv_file, dtype={id_field: str}, sep="\t", engine="python"
+            )
+        else:
+            df = pd.read_csv(csv_file, dtype={id_field: str})
+
     project = Project()
     if dataset_identifier is not None:
-        from rdflib import Literal as _Lit
-
         project.graph.add(
             (
                 project.identifier,
                 _C.NIDM["dataset_identifier"],
-                _Lit(dataset_identifier),
+                Literal(dataset_identifier),
             )
         )
 
+    # Project-level prov:Collection that every per-row AssessmentObject is
+    # linked into via prov:hadMember (matches legacy new-file shape).
+    collection = Collection(project)
+    collection.graph.add(
+        (collection.identifier, NFO.filename, Literal(csv_file, datatype=XSD.string))
+    )
+
     df_columns = list(df.columns)
     for _, row in df.iterrows():
-        _materialize_row(
+        acq_entity = _materialize_row(
             df_row=row,
             df_columns=df_columns,
             project=project,
@@ -837,6 +879,9 @@ def csv2nidm_project(
             id_field=id_field,
             assessment_name=assessment_name,
             csv_file_path=csv_file,
+        )
+        collection.graph.add(
+            (collection.identifier, PROV.hadMember, acq_entity.identifier)
         )
 
     return project, cde
