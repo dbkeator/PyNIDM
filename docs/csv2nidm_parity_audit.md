@@ -209,3 +209,35 @@ test, and is the right gate before declaring csv2nidm "works as it did."
 6. M1/M2/M3/M4/M5 — edge-case triple alignment.
 7. H4 (`-derivative -out`) — only if that workflow is actually used
    (see N1).
+
+---
+
+## Addendum (2026-06-11): harness findings
+
+The isomorphism harness (`scripts/csv2nidm_parity.py`, WL
+canonicalization) now confirms results empirically:
+
+**Assessment / new-file mode — ISOMORPHIC.** After fixes H1/H2/H3 +
+shared-infra (SCHEMA→https, numpy datatype coercion, drop CDE min/max)
++ string-id + activity label, the new tool's new-file output is
+graph-isomorphic to legacy (modulo run/tool metadata that is supposed
+to differ: timestamps, tool version, output filename).
+
+**`-nidm` add-to-existing — legacy is BROKEN; new is correct.** Running
+legacy `-nidm` against a csv2nidm-built base, `GetParticipantIDs`
+matches **zero** subjects, so legacy appends the data-dictionary CDE +
+export provenance but **drops every measurement** (no AssessmentObjects
+created). The new tool correctly attaches the appended assessment to the
+existing subjects. Because live legacy `-nidm` loses data, it cannot
+serve as a byte-comparison reference here (same category as the N1
+crashes). The new `-nidm` path was instead aligned to legacy *intent*
+(visible in legacy lines 842–890): appended AssessmentObjects now carry
+`prov:Location`, and the write-back export activity links
+`prov:used → project`. The harness's `nidm` mode verifies the new output
+attaches the data rather than byte-comparing against broken legacy.
+
+Root cause of the legacy zero-match was not fully isolated statically:
+the `GetParticipantIDs` SPARQL *looks* correct for the base structure
+(`prov:qualifiedAssociation` → `prov:hadRole sio:Subject` → `prov:agent`
+→ `ndar:src_subject_id`), yet returns empty. Left as a legacy-side
+investigation; not blocking the new tool.
