@@ -223,21 +223,25 @@ shared-infra (SCHEMA→https, numpy datatype coercion, drop CDE min/max)
 graph-isomorphic to legacy (modulo run/tool metadata that is supposed
 to differ: timestamps, tool version, output filename).
 
-**`-nidm` add-to-existing — legacy is BROKEN; new is correct.** Running
-legacy `-nidm` against a csv2nidm-built base, `GetParticipantIDs`
-matches **zero** subjects, so legacy appends the data-dictionary CDE +
-export provenance but **drops every measurement** (no AssessmentObjects
-created). The new tool correctly attaches the appended assessment to the
-existing subjects. Because live legacy `-nidm` loses data, it cannot
-serve as a byte-comparison reference here (same category as the N1
-crashes). The new `-nidm` path was instead aligned to legacy *intent*
-(visible in legacy lines 842–890): appended AssessmentObjects now carry
-`prov:Location`, and the write-back export activity links
-`prov:used → project`. The harness's `nidm` mode verifies the new output
-attaches the data rather than byte-comparing against broken legacy.
+**`-nidm` add-to-existing — legacy drops the data; new is correct.**
+Running legacy `-nidm` against a csv2nidm-built base, legacy appends the
+data-dictionary CDE + export provenance but **drops every measurement**
+(no AssessmentObjects created). The new tool correctly attaches the
+appended assessment to the existing subjects. Because live legacy
+`-nidm` loses data, it cannot serve as a byte-comparison reference here
+(same category as the N1 crashes). The new `-nidm` path was instead
+aligned to legacy *intent* (visible in legacy lines 842–890): appended
+AssessmentObjects now carry `prov:Location`, and the write-back export
+activity links `prov:used → project`. The harness's `nidm` mode verifies
+the new output attaches the data rather than byte-comparing.
 
-Root cause of the legacy zero-match was not fully isolated statically:
-the `GetParticipantIDs` SPARQL *looks* correct for the base structure
-(`prov:qualifiedAssociation` → `prov:hadRole sio:Subject` → `prov:agent`
-→ `ndar:src_subject_id`), yet returns empty. Left as a legacy-side
-investigation; not blocking the new tool.
+Root cause of the legacy data-drop is **not** `GetParticipantIDs` — that
+helper returns the subjects correctly (verified directly). The failure
+is downstream; the strongest candidate is legacy line 609, which passes
+the **zero-stripped** id (`"50001"`) to `GetParticipantUUIDFromSubjectID`
+while the graph stores the zero-padded form (`"0050001"`), so the
+per-row person lookup comes up empty and the row is skipped. Left as a
+legacy-side investigation; not blocking the new tool. **Implication for
+`-derivative`:** since `GetParticipantIDs` works, legacy `-derivative`'s
+subject enumeration is fine, so it may produce real output and could be
+a genuine byte-comparison reference (modulo H4–H7).
