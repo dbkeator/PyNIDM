@@ -37,7 +37,6 @@ from ..derivative_object import DerivativeObject
 from ..person import Person
 from ..project import Project
 from ..session import Session
-from ..software_agent import SoftwareAgent
 from ..utils import (
     add_attributes_with_cde,
     add_export_provenance,
@@ -48,9 +47,10 @@ from ..utils import (
     redcap_datadictionary_to_json,
 )
 from ...core import constants as _C
-from ...core.namespaces import NFO, PROV, SCHEMA, SIO
-from rdflib import RDF, Literal
-from rdflib.namespace import XSD
+from ...core.namespaces import DCT, DCTYPES, NFO, NIDM, NIIRI, PROV, SIO
+from ..core import getUUID
+from rdflib import RDF, Literal, URIRef
+from rdflib.namespace import XSD, split_uri
 
 __version__ = "0.3.0"  # Phase C: -derivative + software metadata
 _log = logging.getLogger(__name__)
@@ -610,30 +610,33 @@ def match_acquistion_task_run_from_session(
     return None, None
 
 
+def _software_scalar(software_metadata: pd.DataFrame, col: str) -> str:
+    """First-row scalar from the software-metadata frame (legacy convention)."""
+    return software_metadata[col].to_string(index=False).strip()
+
+
 def _create_software_agent_for_derivative(
     project: Project, software_metadata: pd.DataFrame
-) -> SoftwareAgent:
-    """Create a SoftwareAgent wrapper carrying the supplied metadata.
+) -> URIRef:
+    """Create a ``nidm:SoftwareAgent`` node carrying the supplied metadata
+    and return its URIRef.
 
-    Uses the first row of *software_metadata* (legacy convention -- one
-    row per CSV).  Title / description / version / url / cmdline /
-    platform all get attached as named slots on the wrapper.
+    Matches legacy intent (csv2nidm.py ~742-839): the agent is typed
+    ``nidm:SoftwareAgent`` (+ ``prov:Agent``) -- NOT ``prov:SoftwareAgent``
+    -- with ``dcmitype:title`` / ``dct:description`` / ``dct:hasVersion`` /
+    ``sio:URL``.  (cmdline/platform are emitted on the Derivative activity
+    by the caller, also matching legacy.)
     """
-
-    def _scalar(col):
-        return software_metadata[col].to_string(index=False).strip()
-
-    agent = SoftwareAgent(
-        project,
-        name=_scalar("title"),
-        software_version=_scalar("version"),
-        command=_scalar("cmdline"),
-        runtime_platform=_scalar("platform"),
+    agent = NIIRI[getUUID()]
+    g = project.graph
+    g.add((agent, RDF.type, NIDM["SoftwareAgent"]))
+    g.add((agent, RDF.type, PROV.Agent))
+    g.add((agent, DCTYPES.title, Literal(_software_scalar(software_metadata, "title"))))
+    g.add(
+        (agent, DCT.description, Literal(_software_scalar(software_metadata, "description")))
     )
-    # url isn't a schema slot on SoftwareAgent; add it as a raw schema:url triple.
-    from rdflib import Literal as _Lit
-
-    agent.graph.add((agent.identifier, SCHEMA.url, _Lit(_scalar("url"))))
+    g.add((agent, DCT.hasVersion, Literal(_software_scalar(software_metadata, "version"))))
+    g.add((agent, SIO.URL, Literal(_software_scalar(software_metadata, "url"))))
     return agent
 
 
@@ -668,8 +671,6 @@ def _materialize_derivative_row(
     task/run/session matched an existing acquisition), ``False`` when
     no source acquisition could be found and we silently skipped.
     """
-    from rdflib import Literal as _Lit
-
     subjectid = str(df_row[id_field]).lstrip("0")
     session_num = str(df_row.get("ses", "nan"))
     if session_num in ("nan", ""):
@@ -692,13 +693,23 @@ def _materialize_derivative_row(
     if source_acq_entity is None:
         return False
 
-    # Create the derivative + entity.
+    # Create the derivative + entity.  The DerivativeObject is additionally
+    # typed nidm:DerivativeCollection (H5 -- matches legacy line 688).
     der = Derivative(project=project)
     der_entity = DerivativeObject(derivative=der)
+    der_entity.graph.add(
+        (der_entity.identifier, RDF.type, NIDM["DerivativeCollection"])
+    )
 
-    # prov:used link from the derivative activity to the matched
-    # source acquisition activity.
-    der.graph.add((der.identifier, PROV.used, source_activity))
+    # prov:used link from the derivative activity to the matched source
+    # acquisition activity, re-qualified into the niiri namespace (matches
+    # legacy split_uri + QualifiedName(niiri_ns, name)).
+    try:
+        _, _src_name = split_uri(source_activity)
+        used_target = NIIRI[_src_name]
+    except Exception:  # pragma: no cover - non-splittable URI
+        used_target = source_activity
+    der.graph.add((der.identifier, PROV.used, used_target))
 
     # Add row metadata to the derivative entity.
     skipped_columns = {id_field, "ses", "task", "run", "subject_id", "source_url"}
@@ -712,11 +723,24 @@ def _materialize_derivative_row(
             obj=der_entity, cde=cde, row_variable=column, value=value
         )
 
-    # source_url -> prov:Location on the derivative entity.
+    # source_url -> prov:Location on the derivative entity, as a URIRef
+    # (legacy uses prov Identifier(...), i.e. a resource not a literal).
     if "source_url" in df_columns and not pd.isna(df_row["source_url"]):
         der_entity.graph.add(
-            (der_entity.identifier, PROV.Location, _Lit(df_row["source_url"]))
+            (der_entity.identifier, PROV.Location, URIRef(str(df_row["source_url"])))
         )
+
+    # cmdline / platform go on the Derivative ACTIVITY, keyed by the
+    # software url + "cmdline"/"platform" (matches legacy lines 728-740).
+    software_url = _software_scalar(software_metadata, "url")
+    der.graph.add(
+        (der.identifier, URIRef(software_url + "cmdline"),
+         Literal(_software_scalar(software_metadata, "cmdline")))
+    )
+    der.graph.add(
+        (der.identifier, URIRef(software_url + "platform"),
+         Literal(_software_scalar(software_metadata, "platform")))
+    )
 
     # Look up the existing Person for this subject so we can attach a
     # qualified association.
@@ -726,7 +750,7 @@ def _materialize_derivative_row(
         person = Person.from_existing_subject(project.graph, person_uri)
         _add_qualified_association_to_derivative(der, person, role=SIO.Subject)
 
-    # Software agent + role.
+    # Software agent (nidm:SoftwareAgent) + neuroimaging-analysis-software role.
     software_agent = _create_software_agent_for_derivative(project, software_metadata)
     _add_qualified_association_to_derivative(
         der,

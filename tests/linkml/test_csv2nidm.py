@@ -651,9 +651,11 @@ def test_load_software_metadata_rejects_missing_columns(tmp_path: Path):
 
 
 def test_create_software_agent_carries_metadata(tmp_path: Path):
-    """The wrapper should expose the supplied title/version/cmdline/etc.
-    as triples on its graph."""
-    from nidm.linkml.core.namespaces import SCHEMA
+    """The derivative software agent is typed nidm:SoftwareAgent (+
+    prov:Agent) and carries dcmitype:title / dct:description /
+    dct:hasVersion / sio:URL (legacy-intent predicates)."""
+    from rdflib import RDF
+    from nidm.linkml.core.namespaces import DCT, DCTYPES, NIDM, PROV, SIO
     from nidm.linkml.experiment.project import Project as _Project
     from nidm.linkml.experiment.tools.csv2nidm import (
         _create_software_agent_for_derivative,
@@ -668,11 +670,14 @@ def test_create_software_agent_carries_metadata(tmp_path: Path):
     )
     meta = _load_software_metadata(str(meta_path))
     agent = _create_software_agent_for_derivative(project, meta)
-    g = agent.graph
-    names = list(g.objects(agent.identifier, SCHEMA.name))
-    assert [str(n) for n in names] == ["FSL"]
-    versions = list(g.objects(agent.identifier, SCHEMA.softwareVersion))
-    assert [str(v) for v in versions] == ["6.0.5"]
+    g = project.graph
+    # nidm:SoftwareAgent (NOT prov:SoftwareAgent) + prov:Agent
+    assert (agent, RDF.type, NIDM["SoftwareAgent"]) in g
+    assert (agent, RDF.type, PROV.Agent) in g
+    assert [str(n) for n in g.objects(agent, DCTYPES.title)] == ["FSL"]
+    assert [str(v) for v in g.objects(agent, DCT.hasVersion)] == ["6.0.5"]
+    assert list(g.objects(agent, DCT.description))
+    assert list(g.objects(agent, SIO.URL))
 
 
 def test_find_session_for_subjectid_returns_none_when_session_num_is_none():
@@ -751,8 +756,10 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     from nidm.linkml.experiment.tools import csv2nidm as csv2nidm_mod
 
     existing = _build_existing_nidm_file(tmp_path, ["sub-01"])
-    fake_acq_activity = URIRef("http://example.org/source-acquisition")
-    fake_acq_entity = URIRef("http://example.org/source-entity")
+    # niiri instance URIs so the legacy-style niiri re-qualification of
+    # prov:used is an identity (the real source activity is always niiri).
+    fake_acq_activity = URIRef("http://iri.nidash.org/source-acquisition")
+    fake_acq_entity = URIRef("http://iri.nidash.org/source-entity")
     monkeypatch.setattr(
         csv2nidm_mod, "find_session_for_subjectid", lambda *_a, **_kw: None
     )
@@ -797,6 +804,15 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     assert len(dobjs) == 1
     locations = list(g.objects(dobjs[0], PROV.Location))
     assert any(str(loc) == "http://example.org/d" for loc in locations)
+    # ...as a URIRef (legacy uses a prov Identifier, not a literal).
+    assert all(isinstance(loc, URIRef) for loc in locations)
+
+    # H5: the DerivativeObject is additionally typed nidm:DerivativeCollection.
+    assert (dobjs[0], RDF.type, _NIDM["DerivativeCollection"]) in g
+
+    # H7: the software agent is nidm:SoftwareAgent (not prov:SoftwareAgent).
+    soft_agents = list(g.subjects(RDF.type, _NIDM["SoftwareAgent"]))
+    assert len(soft_agents) == 1
 
 
 def test_csv2nidm_main_derivative_with_no_match_short_circuits(
