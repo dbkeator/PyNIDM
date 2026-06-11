@@ -815,6 +815,50 @@ def test_csv2nidm_add_derivative_happy_path(tmp_path: Path, monkeypatch):
     assert len(soft_agents) == 1
 
 
+def test_csv2nidm_derivative_freshfile_builds_derivatives(tmp_path: Path):
+    """H4: -derivative without -nidm builds a fresh NIDM file of
+    Derivatives (one Derivative + DerivativeObject + fresh Person +
+    nidm:SoftwareAgent per row, no prov:used since there's no source)."""
+    from rdflib import URIRef
+    from nidm.linkml.core.namespaces import NIDM as _NIDM
+    from nidm.linkml.experiment.tools.csv2nidm import csv2nidm_derivative_project
+
+    csv_path = _write_csv(
+        tmp_path,
+        "deriv.csv",
+        ["participant_id", "ses", "task", "run", "source_url", "fa"],
+        [
+            ["sub-01", "1", "rest", "1", "http://example.org/d1", 0.7],
+            ["sub-02", "1", "rest", "1", "http://example.org/d2", 0.6],
+        ],
+    )
+    json_map = _build_covering_json_map(tmp_path, csv_path)
+    deriv = _write_software_metadata_csv(tmp_path)
+
+    project, _cde = csv2nidm_derivative_project(
+        csv_file=str(csv_path),
+        output_file=str(tmp_path / "out.ttl"),
+        derivative_file=str(deriv),
+        json_map=str(json_map),
+        associate_concepts=False,
+        id_field="participant_id",
+    )
+    g = project.graph
+
+    assert len(list(g.subjects(RDF.type, _NIDM["Derivative"]))) == 2
+    dobjs = list(g.subjects(RDF.type, _NIDM["DerivativeObject"]))
+    assert len(dobjs) == 2
+    assert all((d, RDF.type, _NIDM["DerivativeCollection"]) in g for d in dobjs)
+    # one fresh subject Person and one nidm:SoftwareAgent per row
+    assert len(list(g.subjects(RDF.type, PROV.Person))) == 2
+    assert len(list(g.subjects(RDF.type, _NIDM["SoftwareAgent"]))) == 2
+    # source_url lands as a prov:Location URIRef
+    locs = [o for d in dobjs for o in g.objects(d, PROV.Location)]
+    assert locs and all(isinstance(loc, URIRef) for loc in locs)
+    # fresh-file derivatives have no source acquisition -> no prov:used
+    assert not list(g.subject_objects(PROV.used))
+
+
 def test_csv2nidm_main_derivative_with_no_match_short_circuits(
     tmp_path: Path, monkeypatch
 ):

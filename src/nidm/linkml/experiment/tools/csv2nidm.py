@@ -1009,11 +1009,148 @@ def _build_arg_parser() -> ArgumentParser:
         dest="derivative",
         required=False,
         help=(
-            "Phase B (not yet active): software-metadata CSV path "
-            "describing the tool that produced this derivative."
+            "Software-metadata CSV path describing the tool that produced "
+            "this derivative.  With -nidm, attaches derivatives to an "
+            "existing NIDM file; with -out, builds a fresh NIDM file of "
+            "derivatives."
         ),
     )
     return parser
+
+
+def _materialize_derivative_row_freshfile(
+    df_row: pd.Series,
+    df_columns: List[str],
+    project: Project,
+    cde: Graph,
+    id_field: Optional[str],
+    software_metadata: pd.DataFrame,
+) -> None:
+    """Materialize one Derivative + DerivativeObject for *df_row* in a
+    fresh NIDM file.
+
+    Mirrors legacy csv2nidm.py ~993-1134: a new ``Person`` (subject agent)
+    and a ``nidm:SoftwareAgent`` are created, with the same software
+    metadata block as the ``-nidm`` derivative path.  Because there is no
+    existing acquisition, there is no source matching and no ``prov:used``.
+    """
+    der = Derivative(project=project)
+    der_entity = DerivativeObject(derivative=der)
+    der_entity.graph.add(
+        (der_entity.identifier, RDF.type, NIDM["DerivativeCollection"])
+    )
+
+    skipped_columns = {id_field, "ses", "task", "run", "subject_id", "source_url"}
+    for column in df_columns:
+        if column in skipped_columns:
+            continue
+        value = df_row[column]
+        if pd.isna(value):
+            continue
+        add_attributes_with_cde(
+            obj=der_entity, cde=cde, row_variable=column, value=value
+        )
+
+    if "source_url" in df_columns and not pd.isna(df_row["source_url"]):
+        der_entity.graph.add(
+            (der_entity.identifier, PROV.Location, URIRef(str(df_row["source_url"])))
+        )
+
+    # Fresh subject agent (no existing graph to look up).
+    if id_field is not None and id_field in df_columns:
+        subject = Person(project, subject_id=str(df_row[id_field]))
+        _add_qualified_association_to_derivative(der, subject, role=SIO.Subject)
+
+    # cmdline / platform on the Derivative activity.
+    software_url = _software_scalar(software_metadata, "url")
+    der.graph.add(
+        (
+            der.identifier,
+            URIRef(software_url + "cmdline"),
+            Literal(_software_scalar(software_metadata, "cmdline")),
+        )
+    )
+    der.graph.add(
+        (
+            der.identifier,
+            URIRef(software_url + "platform"),
+            Literal(_software_scalar(software_metadata, "platform")),
+        )
+    )
+
+    # Software agent (nidm:SoftwareAgent) + neuroimaging-analysis-software role.
+    software_agent = _create_software_agent_for_derivative(project, software_metadata)
+    _add_qualified_association_to_derivative(
+        der, software_agent, role=_C.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE
+    )
+
+
+def csv2nidm_derivative_project(
+    csv_file: str,
+    *,
+    output_file: Optional[str] = None,
+    derivative_file: str,
+    json_map=None,
+    associate_concepts: bool = False,
+    dataset_identifier: Optional[str] = None,
+    id_field: Optional[str] = None,
+) -> Tuple[Project, Graph]:
+    """Build a fresh NIDM file of derivatives from a CSV (the
+    ``-derivative -out`` path; legacy csv2nidm.py ~988-1134).
+
+    Returns ``(project, cde_graph)``.  Each row becomes a ``Derivative`` +
+    ``DerivativeObject`` (typed ``nidm:DerivativeCollection``) with a fresh
+    ``Person`` subject agent and a ``nidm:SoftwareAgent``.
+    """
+    df = _read_input_dataframe(csv_file)
+    out_dir = dirname(output_file) if output_file else dirname(csv_file)
+    assessment_name = basename(csv_file)
+
+    column_to_terms, cde = map_variables_to_terms(
+        df=df,
+        assessment_name=assessment_name,
+        directory=out_dir,
+        output_file=output_file or os.path.join(out_dir, "nidm.ttl"),
+        json_source=json_map,
+        associate_concepts=associate_concepts,
+    )
+
+    if id_field is None:
+        id_field = detect_idfield(column_to_terms) if column_to_terms else None
+
+    # Re-read the id column as a string so zero-padded ids survive.
+    if id_field is not None:
+        if csv_file.endswith(".tsv"):
+            df = pd.read_csv(
+                csv_file, dtype={id_field: str}, sep="\t", engine="python"
+            )
+        else:
+            df = pd.read_csv(csv_file, dtype={id_field: str})
+
+    software_metadata = _load_software_metadata(derivative_file)
+
+    project = Project()
+    if dataset_identifier is not None:
+        project.graph.add(
+            (
+                project.identifier,
+                _C.NIDM["dataset_identifier"],
+                Literal(dataset_identifier),
+            )
+        )
+
+    df_columns = list(df.columns)
+    for _, row in df.iterrows():
+        _materialize_derivative_row_freshfile(
+            df_row=row,
+            df_columns=df_columns,
+            project=project,
+            cde=cde,
+            id_field=id_field,
+            software_metadata=software_metadata,
+        )
+
+    return project, cde
 
 
 def csv2nidm_main(argv: Optional[list] = None) -> int:
@@ -1040,14 +1177,22 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
 
     json_map = _resolve_json_map(args)
 
+    if args.derivative is not None and args.nidm_file is None:
+        # H4: -derivative without -nidm -> fresh-file derivative (legacy
+        # supports building a brand-new NIDM file of derivatives).
+        project, cde = csv2nidm_derivative_project(
+            csv_file=args.csv_file,
+            output_file=args.output_file,
+            derivative_file=args.derivative,
+            json_map=json_map,
+            associate_concepts=not args.no_concepts,
+            dataset_identifier=args.dataset_identifier,
+        )
+        _write_nidm_graph(project=project, cde=cde, output_file=args.output_file)
+        return 0
+
     if args.derivative is not None:
-        # Phase C: -derivative + software metadata.  Requires -nidm.
-        if args.nidm_file is None:
-            print(
-                "ERROR: -derivative requires -nidm to identify the existing "
-                "NIDM file the derivative data attaches to."
-            )
-            sys.exit(1)
+        # -derivative + software metadata, attached to an existing NIDM file.
         project, cde, rows_added = csv2nidm_add_derivative_to_existing(
             csv_file=args.csv_file,
             nidm_file=args.nidm_file,
