@@ -157,6 +157,17 @@ def get_rdf_literal_type(rdf_literal: Any) -> Literal:
       * everything else -> ``Literal(str, XSD.string)``
     """
     if not isinstance(rdf_literal, Literal):
+        # numpy / pandas scalars (e.g. numpy.int64 from a DataFrame cell)
+        # aren't recognized by rdflib's Python->Literal casting and would
+        # fall through to xsd:string; unwrap them to the native Python
+        # scalar first so integers / floats get the right XSD datatype
+        # (matches the legacy behavior of typing int columns as
+        # xsd:integer rather than xsd:string).
+        if hasattr(rdf_literal, "item") and not isinstance(rdf_literal, (str, bytes)):
+            try:
+                rdf_literal = rdf_literal.item()
+            except (ValueError, AttributeError):
+                pass
         rdf_literal = Literal(rdf_literal)
 
     if rdf_literal.datatype in (XSD.integer, XSD.int):
@@ -241,25 +252,24 @@ def csv_dd_to_json_dd(csv_file: Union[str, "os.PathLike[str]"]):
         key = str(csv_row["source_variable"]).strip('"')
         json_dd[key] = {}
 
+        # NOTE: minValue / maxValue are intentionally NOT carried into the
+        # CDE entry.  Legacy csv2nidm drops them (its numeric values fell
+        # through a string-only branch), and because DD_UUID hashes the
+        # whole entry, including them here would change the per-element
+        # CDE URI and break graph isomorphism with legacy output.
         for field in (
             "label",
             "description",
             "valueType",
             "measureOf",
             "unitCode",
-            "minValue",
-            "maxValue",
         ):
             value = csv_row[field]
             # Skip true missing values (pd.NA / NaN); pandas reports those
             # as float NaN for numeric columns and as NaN-flagged otherwise.
             if pd.isna(value):
                 continue
-            # Coerce non-string values (pandas auto-types numeric columns
-            # like minValue / maxValue as int64 / float64) to string for
-            # the JSON output.  The legacy code only handled the string
-            # branch and silently dropped numeric values -- this is a
-            # deliberate bug fix in the port.
+            # Coerce non-string values to string for the JSON output.
             str_value = str(value).strip('"')
             if str_value:
                 json_dd[key][field] = str_value

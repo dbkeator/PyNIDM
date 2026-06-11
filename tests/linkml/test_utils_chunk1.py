@@ -224,6 +224,9 @@ def test_csv_dd_to_json_dd_basic(tmp_path: Path):
         ],
     )
     out = utils.csv_dd_to_json_dd(csv_path)
+    # minValue/maxValue are intentionally NOT carried into the CDE entry
+    # (legacy parity: legacy drops them, and DD_UUID hashes the entry, so
+    # including them would change the per-element CDE URI).
     assert out == {
         "age": {
             "label": "Participant age",
@@ -232,8 +235,6 @@ def test_csv_dd_to_json_dd_basic(tmp_path: Path):
             "measureOf": "http://uri.interlex.org/0105536",
             "isAbout": [{"@id": "http://uri.interlex.org/0101431"}],
             "unitCode": "years",
-            "minValue": "0",
-            "maxValue": "120",
         },
     }
 

@@ -81,7 +81,7 @@ DATALAD = Namespace("http://datasets.datalad.org/")
 INTERLEX = Namespace("http://uri.interlex.org/")
 REPROSCHEMA = Namespace("http://schema.repronim.org/")
 EDAM = Namespace("https://bioportal.bioontology.org/ontologies/EDAM")
-SCHEMA = Namespace("http://schema.org/")
+SCHEMA = Namespace("https://schema.org/")
 
 # ---------------------------------------------------------------------------
 # Canonical prefix -> Namespace mapping.  Order is preserved for predictable
