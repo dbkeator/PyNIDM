@@ -555,8 +555,10 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
     assert existing.stat().st_mtime == pytest.approx(pre_mtime, abs=0.5)
 
 
-def test_csv2nidm_main_derivative_requires_nidm(tmp_path: Path):
-    """-derivative without -nidm is an error (legacy parity)."""
+def test_csv2nidm_main_requires_nidm_or_out(tmp_path: Path):
+    """csv2nidm errors only when NEITHER -nidm nor -out is supplied (legacy
+    parity).  -derivative -out (no -nidm) is a valid fresh-file build, so the
+    error is specifically about having no output target at all."""
     csv_path = _write_csv(
         tmp_path,
         "data.csv",
@@ -566,16 +568,8 @@ def test_csv2nidm_main_derivative_requires_nidm(tmp_path: Path):
     deriv = tmp_path / "soft.csv"
     deriv.write_text("title,description,version,url,cmdline,platform,ID\n")
     with pytest.raises(SystemExit) as exc:
-        csv2nidm_main(
-            [
-                "-csv",
-                str(csv_path),
-                "-out",
-                str(tmp_path / "out.ttl"),
-                "-derivative",
-                str(deriv),
-            ]
-        )
+        # neither -nidm nor -out -> error
+        csv2nidm_main(["-csv", str(csv_path), "-derivative", str(deriv)])
     assert exc.value.code == 1
 
 
@@ -832,7 +826,28 @@ def test_csv2nidm_derivative_freshfile_builds_derivatives(tmp_path: Path):
             ["sub-02", "1", "rest", "1", "http://example.org/d2", 0.6],
         ],
     )
-    json_map = _build_covering_json_map(tmp_path, csv_path)
+    # Cover participant_id + the measure column (fa); the structural columns
+    # (ses/task/run/source_url) are dropped before mapping, so they need no entry.
+    from nidm.linkml.core import constants as _C
+
+    json_map = _write_json_map(
+        tmp_path,
+        assessment=csv_path.name,
+        mapping={
+            "participant_id": {
+                "label": "participant_id",
+                "description": "Subject identifier",
+                "source_variable": "participant_id",
+                "isAbout": [{"@id": str(_C.NIDM_SUBJECTID), "label": "subject_id"}],
+            },
+            "fa": {
+                "label": "FA",
+                "description": "Fractional anisotropy",
+                "source_variable": "fa",
+                "isAbout": [{"@id": "http://example.org/fa", "label": "FA"}],
+            },
+        },
+    )
     deriv = _write_software_metadata_csv(tmp_path)
 
     project, _cde = csv2nidm_derivative_project(

@@ -1106,8 +1106,14 @@ def csv2nidm_derivative_project(
     out_dir = dirname(output_file) if output_file else dirname(csv_file)
     assessment_name = basename(csv_file)
 
+    # Drop the derivative-required structural columns (ses/task/run/source_url)
+    # before running map_variables_to_terms so it doesn't try to interactively
+    # annotate them (legacy csv2nidm.py ~417-419).  They are read directly from
+    # each row during materialization, not treated as data elements.
+    df_for_mapping = df.drop(columns=list(_DERIVATIVE_INPUT_REQUIRED), errors="ignore")
+
     column_to_terms, cde = map_variables_to_terms(
-        df=df,
+        df=df_for_mapping,
         assessment_name=assessment_name,
         directory=out_dir,
         output_file=output_file or os.path.join(out_dir, "nidm.ttl"),
