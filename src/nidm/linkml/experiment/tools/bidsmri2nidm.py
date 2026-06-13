@@ -1166,9 +1166,11 @@ def _build_arg_parser() -> ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Emit one NIDM turtle file per subject, named sub-<id>_nidm.ttl.  "
-            "By default they go in the BIDS directory; use -o to specify a "
-            "different output directory."
+            "Emit one NIDM turtle file per subject, written into that subject's "
+            "BIDS directory as BIDS_ROOT/sub-<id>/nidm.ttl.  By default they go "
+            "under the BIDS directory; use -o to specify a different base output "
+            "directory (sub-<id>/nidm.ttl is created beneath it).  With "
+            "-bidsignore, each sub-<id>/nidm.ttl is added to .bidsignore."
         ),
     )
     return parser
@@ -1244,7 +1246,12 @@ def main(argv: Optional[list] = None) -> int:
                 project_uuid=shared_project_uuid,
                 dataset_uuid=shared_dataset_uuid,
             )
-            outputfile = os.path.join(out_dir, f"sub-{subj}_nidm.ttl")
+            # BIDS-friendly layout: write each subject's NIDM file into that
+            # subject's directory as nidm.ttl (i.e. BIDS_ROOT/sub-<id>/nidm.ttl)
+            # rather than a flat sub-<id>_nidm.ttl in the output root.
+            subj_dir = os.path.join(out_dir, f"sub-{subj}")
+            os.makedirs(subj_dir, exist_ok=True)
+            outputfile = os.path.join(subj_dir, "nidm.ttl")
             bidsignore_name = (
                 os.path.relpath(os.path.abspath(outputfile), abs_bids)
                 if (args.bidsignore and out_inside_bids)

@@ -418,8 +418,8 @@ def test_cli_per_subject_writes_one_file_per_subject(tmp_path: Path):
 
     rc = main(["-d", str(tmp_path), "-o", str(out_dir), "--per_subject"])
     assert rc == 0
-    assert (out_dir / "sub-01_nidm.ttl").exists()
-    assert (out_dir / "sub-02_nidm.ttl").exists()
+    assert (out_dir / "sub-01" / "nidm.ttl").exists()
+    assert (out_dir / "sub-02" / "nidm.ttl").exists()
 
 
 # ---------------------------------------------------------------------------
