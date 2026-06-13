@@ -422,6 +422,20 @@ def test_cli_per_subject_writes_one_file_per_subject(tmp_path: Path):
     assert (out_dir / "sub-02" / "nidm.ttl").exists()
 
 
+def test_cli_relative_output_path_is_resolved_and_created(tmp_path: Path, monkeypatch):
+    """-o accepts a relative path: it resolves against the current working
+    directory and creates any missing parent directories."""
+    bids = tmp_path / "bids"
+    bids.mkdir()
+    _write_dataset_description(bids)
+    _write_t1w_scan(bids, subject="sub-01")
+
+    monkeypatch.chdir(tmp_path)
+    rc = main(["-d", str(bids), "-o", "nested/out.ttl"])
+    assert rc == 0
+    assert (tmp_path / "nested" / "out.ttl").is_file()
+
+
 # ---------------------------------------------------------------------------
 # Phase B: participants.tsv -> Person / Session / AssessmentObject
 # ---------------------------------------------------------------------------

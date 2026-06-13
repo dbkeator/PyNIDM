@@ -1158,7 +1158,10 @@ def _build_arg_parser() -> ArgumentParser:
         dest="outputfile",
         required=False,
         default="nidm.ttl",
-        help="Output turtle filename (or directory in --per_subject mode).",
+        help="Output turtle filename (or directory in --per_subject mode).  "
+        "Accepts an absolute OR relative path (relative paths resolve against "
+        "the current working directory, ~ is expanded, and missing parent "
+        "directories are created).",
     )
     parser.add_argument(
         "-per_subject",
@@ -1179,10 +1182,13 @@ def _build_arg_parser() -> ArgumentParser:
 def _resolve_per_subject_output_dir(args) -> str:
     """When --per_subject is set, the -o flag is interpreted as an output
     directory; falls back to the BIDS directory if -o wasn't supplied.
-    Creates the directory when missing.  Matches legacy behavior."""
+    Creates the directory when missing.  Matches legacy behavior.
+
+    Relative -o paths (and ~) are resolved against the current working
+    directory."""
     if args.outputfile == "nidm.ttl":
         return args.directory
-    out_dir = args.outputfile
+    out_dir = os.path.abspath(os.path.expanduser(args.outputfile))
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
     return out_dir
@@ -1269,11 +1275,23 @@ def main(argv: Optional[list] = None) -> int:
             )
     else:
         project, collection, cde, cde_pheno = bidsmri2project(directory, args)
-        outputfile = (
-            os.path.join(directory, args.outputfile)
-            if args.outputfile == "nidm.ttl"
-            else args.outputfile
-        )
+        if args.outputfile == "nidm.ttl":
+            outputfile = os.path.join(directory, args.outputfile)
+            bidsignore_name = args.outputfile
+        else:
+            # Support relative -o paths (and ~): resolve against the current
+            # working directory and create the parent directory if needed.
+            outputfile = os.path.abspath(os.path.expanduser(args.outputfile))
+            parent = os.path.dirname(outputfile)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # .bidsignore entries are relative to the BIDS root; use that when
+            # the output lands inside the BIDS tree, otherwise just the filename.
+            abs_bids = os.path.abspath(directory)
+            if outputfile == abs_bids or outputfile.startswith(abs_bids + os.sep):
+                bidsignore_name = os.path.relpath(outputfile, abs_bids)
+            else:
+                bidsignore_name = os.path.basename(outputfile)
         _write_nidm_graph(
             project=project,
             collection=collection,
@@ -1282,7 +1300,7 @@ def main(argv: Optional[list] = None) -> int:
             outputfile=outputfile,
             bidsignore=args.bidsignore,
             directory=directory,
-            bidsignore_name=args.outputfile,
+            bidsignore_name=bidsignore_name,
         )
     return 0
 
