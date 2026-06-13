@@ -592,8 +592,9 @@ option is required (the group is mutually exclusive).
 QueryAI — AI-Assisted Natural Language Query
 ---------------------------------------------
 This tool translates natural-language questions about your NIDM data into
-SPARQL queries using an LLM (Anthropic Claude or OpenAI GPT).  It uses a
-two-phase approach:
+SPARQL queries using an LLM — either a cloud API (Anthropic Claude or OpenAI
+GPT) or an optional local LLM server (e.g. llama.cpp or Ollama) for fully
+offline use.  It uses a two-phase approach:
 
 1. **Phase 1 — Concept Resolution:** The AI extracts variable concepts
    (e.g. "age", "left hippocampus volume") from your question.  The tool
@@ -623,16 +624,48 @@ two-phase approach:
                                  executing it
      --help                      Show this message and exit.
 
-**Prerequisites:**
+**Prerequisites — choose an LLM provider.**
 
-An API key for either Anthropic or OpenAI is required.  Set one of:
+``queryai`` can use a cloud API (Anthropic or OpenAI) or an optional local LLM
+server, so it can run fully offline with no API key.  The provider is selected
+by the ``PYNIDM_AI_PROVIDER`` environment variable
+(``anthropic`` | ``openai`` | ``llama``, case-insensitive); if it is unset the
+provider is auto-detected from whichever of the variables below is present.
+
+*Anthropic (Claude):*
 
 .. code:: bash
 
    export ANTHROPIC_API_KEY=sk-ant-...
+
+*OpenAI (GPT):*
+
+.. code:: bash
+
    export OPENAI_API_KEY=sk-...
 
-Or create a config file at ``~/.pynidm/config.json``:
+*Optional local server (no API key, runs offline).*  ``queryai`` can talk to any
+local **OpenAI-compatible** LLM server — for example the ``llama-server``
+shipped with `llama.cpp <https://github.com/ggml-org/llama.cpp>`_, or
+`Ollama <https://ollama.com>`_.  Start the server, then point ``queryai`` at it:
+
+.. code:: bash
+
+   # llama.cpp: serves an OpenAI-compatible API on :8080 (use a generous context)
+   llama-server -m /path/to/model.gguf -c 8192
+
+   export PYNIDM_AI_PROVIDER=llama
+   # defaults below match llama.cpp; override for Ollama, etc.
+   export PYNIDM_LLAMA_URL=http://localhost:8080/v1   # Ollama: http://localhost:11434/v1
+   export PYNIDM_LLAMA_MODEL=local-model              # Ollama: the model tag, e.g. llama3
+
+With a local server, **nothing leaves your machine** — not the question, the
+schema, or your data.  Local models are typically less reliable than Claude/GPT
+at producing valid SPARQL; prefer a capable instruct model with a large context
+window, and inspect the generated query with ``-s``.
+
+A cloud provider + key may instead be stored in a config file at
+``~/.pynidm/config.json``:
 
 .. code:: json
 

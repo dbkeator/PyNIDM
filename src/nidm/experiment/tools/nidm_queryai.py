@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sys
 import click
+import requests
 from rdflib import Graph, Literal, Namespace
 from nidm.experiment.tools.click_base import cli
 
@@ -624,9 +625,25 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
 # ---------------------------------------------------------------------------
 
 
-def _get_api_key():
-    """Get the API key from environment or config file."""
-    key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
+def _get_api_key(provider=None):
+    """Get the API key for *provider* from the environment or config file.
+
+    When the provider is known, the provider-specific env var is used so the
+    correct key is selected even if both ANTHROPIC_API_KEY and OPENAI_API_KEY
+    are set:
+      - "openai"    -> OPENAI_API_KEY
+      - "anthropic" -> ANTHROPIC_API_KEY
+      - "llama"     -> None (a local server needs no key)
+    With no provider, falls back to whichever key is present (Anthropic first).
+    """
+    if provider == "llama":
+        return None
+    if provider == "openai":
+        key = os.environ.get("OPENAI_API_KEY")
+    elif provider == "anthropic":
+        key = os.environ.get("ANTHROPIC_API_KEY")
+    else:
+        key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if key:
         return key
     config_path = Path.home() / ".pynidm" / "config.json"
@@ -637,11 +654,23 @@ def _get_api_key():
 
 
 def _get_provider():
-    """Determine which AI provider to use based on available API key."""
+    """Determine which AI provider to use.
+
+    Precedence: explicit PYNIDM_AI_PROVIDER env var, then a cloud API key in the
+    environment, then a configured local LLaMA server (PYNIDM_LLAMA_URL), then
+    ~/.pynidm/config.json.  Valid providers: "anthropic", "openai", "llama"
+    (a local OpenAI-compatible server such as llama.cpp's llama-server or
+    Ollama).
+    """
+    explicit = os.environ.get("PYNIDM_AI_PROVIDER")
+    if explicit:
+        return explicit.strip().lower()
     if os.environ.get("ANTHROPIC_API_KEY"):
         return "anthropic"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
+    if os.environ.get("PYNIDM_LLAMA_URL"):
+        return "llama"
     config_path = Path.home() / ".pynidm" / "config.json"
     if config_path.exists():
         config = json.loads(config_path.read_text())
@@ -654,6 +683,15 @@ def _get_provider():
 # model deprecation doesn't require a code change.  (The previous
 # hard-coded "claude-sonnet-4-20250514" was retired and now 404s.)
 _ANTHROPIC_MODEL = os.environ.get("PYNIDM_ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+# Local LLaMA / OpenAI-compatible server (llama.cpp's llama-server, Ollama, ...).
+# No API key required.  PYNIDM_LLAMA_URL is the OpenAI-compatible base URL
+# (default = llama.cpp's llama-server on :8080); set to e.g.
+# http://localhost:11434/v1 for Ollama.  PYNIDM_LLAMA_MODEL is the model name to
+# request (llama.cpp serves whatever model it was started with and ignores it;
+# Ollama requires the model tag, e.g. "llama3").
+_LLAMA_URL = os.environ.get("PYNIDM_LLAMA_URL", "http://localhost:8080/v1")
+_LLAMA_MODEL = os.environ.get("PYNIDM_LLAMA_MODEL", "local-model")
 
 
 def _query_anthropic(system_prompt, user_question, api_key):
@@ -701,16 +739,64 @@ def _query_openai(system_prompt, user_question, api_key):
     return response.choices[0].message.content
 
 
+def _query_llama(system_prompt, user_question):
+    """Send a query to a local OpenAI-compatible LLM server (llama.cpp's
+    llama-server, Ollama, etc.).  No API key is required; the endpoint is
+    configured via PYNIDM_LLAMA_URL / PYNIDM_LLAMA_MODEL.
+    """
+    url = _LLAMA_URL.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": _LLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question},
+        ],
+        "max_tokens": 4096,
+        # deterministic generation for SPARQL/concept extraction
+        "temperature": 0,
+        "stream": False,
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=600)
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        click.echo(
+            f"Error: could not connect to a local LLM server at {_LLAMA_URL}. "
+            "Start one (e.g. `llama-server -m <model>.gguf` on :8080, or "
+            "`ollama serve`) and/or set PYNIDM_LLAMA_URL.",
+            err=True,
+        )
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        click.echo(f"Error querying local LLM server at {url}: {e}", err=True)
+        sys.exit(1)
+
+    try:
+        return resp.json()["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError) as e:
+        click.echo(
+            f"Error: unexpected response from local LLM server at {url}: {e}",
+            err=True,
+        )
+        sys.exit(1)
+
+
 def _send_to_ai(system_prompt, user_question):
     """Send a question to the configured AI provider."""
     provider = _get_provider()
-    api_key = _get_api_key()
 
+    # Local LLaMA / OpenAI-compatible server: no API key required.
+    if provider == "llama":
+        return _query_llama(system_prompt, user_question)
+
+    api_key = _get_api_key(provider)
     if not api_key:
         click.echo(
-            "Error: No API key found. Set one of:\n"
+            "Error: No AI provider configured. Set one of:\n"
             "  - ANTHROPIC_API_KEY environment variable\n"
             "  - OPENAI_API_KEY environment variable\n"
+            "  - PYNIDM_AI_PROVIDER=llama (+ optional PYNIDM_LLAMA_URL / "
+            "PYNIDM_LLAMA_MODEL) for a local OpenAI-compatible LLM server\n"
             "  - ~/.pynidm/config.json with "
             '{"provider": "anthropic", "api_key": "sk-ant-..."}',
             err=True,

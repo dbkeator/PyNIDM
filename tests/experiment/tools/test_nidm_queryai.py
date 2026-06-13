@@ -36,3 +36,59 @@ niiri:DX_nolevels a nidm:PersonalDataElement ;
     assert sex.get("levels") == {"1": "Male", "2": "Female"}
     # No level definitions -> no 'levels' key -> queryai must not fabricate a mapping
     assert "levels" not in dx
+
+
+def test_get_provider_selects_local_llama(monkeypatch) -> None:
+    """A configured local LLaMA server (PYNIDM_LLAMA_URL) selects the 'llama'
+    provider when no cloud key is present; an explicit PYNIDM_AI_PROVIDER wins."""
+    from nidm.experiment.tools.nidm_queryai import _get_provider
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("PYNIDM_AI_PROVIDER", raising=False)
+    monkeypatch.setenv("PYNIDM_LLAMA_URL", "http://localhost:8080/v1")
+    assert _get_provider() == "llama"
+
+    monkeypatch.setenv("PYNIDM_AI_PROVIDER", "anthropic")
+    assert _get_provider() == "anthropic"
+
+
+def test_query_llama_posts_openai_format_and_parses(monkeypatch) -> None:
+    """_query_llama POSTs an OpenAI chat payload to <url>/chat/completions and
+    returns choices[0].message.content (no API key, no real server)."""
+    from nidm.experiment.tools import nidm_queryai as q
+
+    captured = {}
+
+    class _FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "SELECT * WHERE {}"}}]}
+
+    def _fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["payload"] = json
+        return _FakeResp()
+
+    monkeypatch.setattr(q.requests, "post", _fake_post)
+
+    out = q._query_llama("SYS_PROMPT", "USER_QUESTION")
+    assert out == "SELECT * WHERE {}"
+    assert captured["url"].endswith("/chat/completions")
+    msgs = captured["payload"]["messages"]
+    assert msgs[0]["role"] == "system" and msgs[0]["content"] == "SYS_PROMPT"
+    assert msgs[1]["role"] == "user" and msgs[1]["content"] == "USER_QUESTION"
+
+
+def test_get_api_key_is_provider_aware(monkeypatch) -> None:
+    """The provider-specific key is selected even when both are set, so
+    PYNIDM_AI_PROVIDER=openai uses OPENAI_API_KEY (not the Anthropic key)."""
+    from nidm.experiment.tools.nidm_queryai import _get_api_key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-xxx")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-yyy")
+    assert _get_api_key("openai") == "sk-oai-yyy"
+    assert _get_api_key("anthropic") == "sk-ant-xxx"
+    assert _get_api_key("llama") is None
