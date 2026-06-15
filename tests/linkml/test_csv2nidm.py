@@ -555,7 +555,7 @@ def test_csv2nidm_main_nidm_path_no_match_skips_write(tmp_path: Path):
     assert existing.stat().st_mtime == pytest.approx(pre_mtime, abs=0.5)
 
 
-def test_csv2nidm_main_requires_nidm_or_out(tmp_path: Path):
+def test_csv2nidm_main_requires_output_target_with_derivative(tmp_path: Path):
     """csv2nidm errors only when NEITHER -nidm nor -out is supplied (legacy
     parity).  -derivative -out (no -nidm) is a valid fresh-file build, so the
     error is specifically about having no output target at all."""

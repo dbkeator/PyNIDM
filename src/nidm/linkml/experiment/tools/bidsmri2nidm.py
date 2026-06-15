@@ -794,7 +794,7 @@ def _find_events_file(bids_layout, file_tpl, bold_path: Path) -> Optional[Path]:
 
 
 def _attach_events_file(
-    bids_layout, file_tpl, acq, bold_obj, collection, directory, bids_root
+    bids_layout, file_tpl, acq, bold_obj, collection, bids_root
 ) -> None:
     """Discover the events.tsv for a func bold scan and emit a
     ``nidm:StimulusResponseFile`` AcquisitionObject linked to the bold
@@ -810,9 +810,7 @@ def _attach_events_file(
     metadata = _load_sidecar_metadata(bold_path)
     task_name = metadata.get("TaskName", file_tpl.entities.get("task"))
 
-    events_obj = AcquisitionObject(
-        acq, filename=_bids_filename(events_path, bids_root)
-    )
+    events_obj = AcquisitionObject(acq, filename=_bids_filename(events_path, bids_root))
     events_obj.graph.add((events_obj.identifier, RDF.type, _C.NIDM_MRI_BOLD_EVENTS))
     events_obj.graph.add(
         (events_obj.identifier, BIDS_Constants.json_keys["TaskName"], _lit(task_name))
@@ -830,9 +828,7 @@ def _attach_events_file(
         )
 
 
-def _attach_bval_file(
-    bids_layout, file_tpl, acq, collection, directory, bids_root
-) -> None:
+def _attach_bval_file(bids_layout, file_tpl, acq, collection, bids_root) -> None:
     """Attach the ``.bval`` paired with a DWI scan, discovered via
     pybids ``get_bval`` (matches legacy behavior)."""
     try:
@@ -855,7 +851,7 @@ def _attach_bval_file(
     _emit_sha512_triple(bval_obj, bval_path, bids_root)
 
 
-def _attach_bvec_files(file_tpl, acq, collection, directory, bids_root) -> None:
+def _attach_bvec_files(file_tpl, acq, collection, bids_root) -> None:
     """Attach ``.bvec`` files paired with a DWI scan.
 
     Bypasses pybids on purpose: some datasets (e.g. ABIDE2) ship
@@ -947,14 +943,10 @@ def addimagingsessions(
         _emit_run_entity(obj, entities)
 
         if datatype == "func":
-            _attach_events_file(
-                bids_layout, file_tpl, acq, obj, collection, directory, bids_root
-            )
+            _attach_events_file(bids_layout, file_tpl, acq, obj, collection, bids_root)
         elif datatype == "dwi":
-            _attach_bval_file(
-                bids_layout, file_tpl, acq, collection, directory, bids_root
-            )
-            _attach_bvec_files(file_tpl, acq, collection, directory, bids_root)
+            _attach_bval_file(bids_layout, file_tpl, acq, collection, bids_root)
+            _attach_bvec_files(file_tpl, acq, collection, bids_root)
 
 
 def bidsmri2project(
