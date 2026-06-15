@@ -75,6 +75,7 @@ def test_query_llama_posts_openai_format_and_parses(monkeypatch) -> None:
     def _fake_post(url, json=None, timeout=None):
         captured["url"] = url
         captured["payload"] = json
+        captured["timeout"] = timeout
         return _FakeResp()
 
     monkeypatch.setattr(q.requests, "post", _fake_post)
