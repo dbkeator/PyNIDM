@@ -608,11 +608,17 @@ offline use.  It uses a two-phase approach:
    ``nidm:sourceVariable``.  If multiple DataElements match, you are
    prompted to select the correct one(s).
 
-2. **Phase 2 — SPARQL Generation:** The resolved URIs, together with the
-   NIDM graph structure from the bundled ``nidm_schema.json``, are sent to
-   the LLM which generates a SPARQL query.  The query is executed locally
+2. **Phase 2 — SPARQL Generation:** For a plain "retrieve these variables"
+   question the tool builds the SPARQL **itself, in code** (no LLM) from the
+   resolved URIs — a person-anchored, zero-padding-tolerant query that joins
+   every variable back to the same subject.  This is fully reproducible
+   regardless of which model ran Phase 1, and avoids the cartesian products
+   and cross-file subject-id mismatches that an LLM-authored join is prone to.
+   For analytical questions (counts, averages, group-by, filtering) the LLM
+   generates the query instead, guided by the NIDM graph structure from the
+   bundled ``nidm_schema.json``.  Either way the query is executed locally
    against your NIDM files via rdflib — **no subject data leaves your
-   machine**.
+   machine**.  See *Query modes* below; ``-s`` shows the query before it runs.
 
 .. code:: bash
 
@@ -627,6 +633,13 @@ offline use.  It uses a two-phase approach:
      -o, --output_file PATH      Optional output file for results (TSV format)
      -s, --show_query            Show the generated SPARQL query before
                                  executing it
+     -m, --mode [auto|deterministic|llm]
+                                 How Phase 2 builds the SPARQL.  'deterministic'
+                                 assembles a person-anchored, zero-padding-
+                                 tolerant query in code from the resolved URIs;
+                                 'llm' always asks the AI; 'auto' (default) uses
+                                 the deterministic builder for plain retrieval
+                                 questions and the AI for analytical ones.
      --help                      Show this message and exit.
 
 **Prerequisites — choose an LLM provider.**  ``queryai`` can use a cloud API
@@ -649,24 +662,43 @@ below is present.
    export OPENAI_API_KEY=sk-...
 
 *Optional local server (no API key, runs offline).*  ``queryai`` can talk to any
-local **OpenAI-compatible** LLM server — for example the ``llama-server``
-shipped with `llama.cpp <https://github.com/ggml-org/llama.cpp>`_, or
-`Ollama <https://ollama.com>`_.  Start the server, then point ``queryai`` at it:
+local **OpenAI-compatible** LLM server, so it can run with no cloud account and
+with nothing leaving your machine.  Two common backends are `llama.cpp
+<https://github.com/ggml-org/llama.cpp>`_ (its ``llama-server``) and `Ollama
+<https://ollama.com>`_.
+
+With **llama.cpp**, install it and start ``llama-server`` with an instruct model.
+``-hf`` downloads a GGUF from HuggingFace and caches it on first run, ``-ngl 99``
+offloads layers to the GPU (Apple Silicon / CUDA), and ``-c`` sets the context
+size (use a generous value — the Phase 2 prompt includes the NIDM schema):
 
 .. code:: bash
 
-   # llama.cpp: serves an OpenAI-compatible API on :8080 (use a generous context)
-   llama-server -m /path/to/model.gguf -c 8192
+   brew install llama.cpp                                          # macOS; see llama.cpp for other platforms
+
+   llama-server -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M -c 16384 -ngl 99
+
+This serves an OpenAI-compatible API on ``http://localhost:8080``.  Then point
+``queryai`` at it and run as usual:
+
+.. code:: bash
 
    export PYNIDM_AI_PROVIDER=llama
-   # defaults below match llama.cpp; override for Ollama, etc.
-   export PYNIDM_LLAMA_URL=http://localhost:8080/v1   # Ollama: http://localhost:11434/v1
-   export PYNIDM_LLAMA_MODEL=local-model              # Ollama: the model tag, e.g. llama3
+   export PYNIDM_LLAMA_URL=http://localhost:8080/v1
+   export PYNIDM_LLAMA_MODEL=local-model     # llama.cpp ignores this; any value is fine
 
-With a local server, **nothing leaves your machine** — not the question, the
-schema, or your data.  Note that local models are typically less reliable than
-Claude/GPT at producing valid SPARQL; prefer a capable instruct model with a
-large context window, and inspect the generated query with ``-s``.
+   pynidm queryai -nl data/nidm.ttl -q "How many subjects are there?" -s
+
+To use **Ollama** instead, run ``ollama serve`` and ``ollama pull llama3``, then
+set ``PYNIDM_LLAMA_URL=http://localhost:11434/v1`` and
+``PYNIDM_LLAMA_MODEL=llama3`` (the model tag).
+
+With a local server **nothing leaves your machine** — not the question, the
+schema, or your data.  Model choice matters: a 7B model handles simple queries,
+but complex multi-variable queries are far more reliable with a 14B+ instruct
+model (e.g. ``Qwen2.5-14B-Instruct-GGUF:Q4_K_M``) if you have the memory.  Local
+models are generally less reliable than Claude/GPT at producing valid SPARQL, so
+always inspect the generated query with ``-s``.
 
 A cloud provider + key may instead be stored in a config file at
 ``~/.pynidm/config.json``::
@@ -690,6 +722,27 @@ A cloud provider + key may instead be stored in a config file at
 .. code:: bash
 
    pynidm queryai -nl data/nidm.ttl
+
+**Query modes (-m).**  By default (``-m auto``) a plain "retrieve / list /
+show these variables" question is answered by the **deterministic builder**:
+the SPARQL is assembled in code from the resolved DataElement URIs, so the
+result is identical no matter which model (cloud or local) ran Phase 1, and is
+immune to the cartesian-product and cross-file subject-id problems an
+LLM-written join can introduce.  Each variable is joined back to the same
+subject through the NIDM provenance backbone, and subject ids are matched after
+stripping leading zeros so a demographics file (``50772``) lines up with a
+FreeSurfer/FSL derivative file (``0050772``).  Coded values are translated to
+labels **only** when the DataElement defines value levels
+(``reproschema:choices``); otherwise the raw value is returned and a note is
+printed — queryai never fabricates a mapping.  Analytical questions (counts,
+averages, group-by, filtering) are routed to the LLM.  Force a path with
+``-m deterministic`` or ``-m llm``.
+
+.. code:: bash
+
+   # deterministic, reproducible, runs even with a small local model
+   pynidm queryai -nl demographics.ttl,freesurfer_cde.ttl \
+     -q "Retrieve age, sex, diagnosis, and left and right hippocampus volume" -s
 
 A demo script that downloads sample NIDM data and runs several example
 queries is available at
