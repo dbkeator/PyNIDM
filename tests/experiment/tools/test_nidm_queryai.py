@@ -8,9 +8,28 @@ from nidm.experiment.tools.nidm_queryai import (
     _build_deterministic_sparql,
     _extract_data_elements,
     _format_results,
+    _load_graph,
     _looks_analytical,
+    _parse_into_graph,
+    _rdflib_format,
     _write_results_csv,
 )
+
+_VALID_TTL = """
+@prefix niiri: <http://iri.nidash.org/> .
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+niiri:AGE a nidm:PersonalDataElement ; rdfs:label "age" .
+"""
+# trailing ';' with no following predicate then a new subject == bad turtle
+# (the exact shape of the malformed Leuven_1/nidm.ttl that crashed a sweep)
+_BAD_TTL = """
+@prefix niiri: <http://iri.nidash.org/> .
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+niiri:SEX a nidm:PersonalDataElement ; rdfs:label "SEX" ;
+niiri:DX a nidm:PersonalDataElement ; rdfs:label "dx" .
+"""
 
 
 def test_extract_data_elements_captures_value_levels(tmp_path: Path) -> None:
@@ -268,3 +287,53 @@ def test_write_results_csv_empty_fields_and_quoting(tmp_path: Path) -> None:
     parsed = list(csv.reader(out.open(newline="", encoding="utf-8")))
     assert parsed[0] == columns
     assert parsed[1] == ["1", "", "x,y"]
+
+
+# ---------------------------------------------------------------------------
+# Graph loading: tolerant parse + cache
+# ---------------------------------------------------------------------------
+
+
+def test_rdflib_format_by_suffix() -> None:
+    assert _rdflib_format("a.ttl") == "turtle"
+    assert _rdflib_format("b.JSONLD") == "json-ld"
+    assert _rdflib_format("c.nt") == "nt"
+    assert _rdflib_format("https://x/fs_cde.ttl?raw=1") == "turtle"
+
+
+def test_parse_into_graph_skips_malformed_file(tmp_path: Path) -> None:
+    """A malformed NIDM file is skipped (and reported) instead of aborting the
+    whole load; the valid file's triples are still present."""
+    good = tmp_path / "good.ttl"
+    bad = tmp_path / "bad.ttl"
+    good.write_text(_VALID_TTL, encoding="utf-8")
+    bad.write_text(_BAD_TTL, encoding="utf-8")
+
+    g = Graph()
+    skipped = _parse_into_graph(g, [str(good), str(bad)])
+
+    assert [s for s, _e in skipped] == [str(bad)]
+    assert len(g) > 0  # the good file still loaded
+
+
+def test_load_graph_caches_clean_load_and_skips_cache_on_error(
+    tmp_path: Path,
+) -> None:
+    """A clean load is cached (a second load returns an equal graph); a load
+    with a skipped file is NOT cached so the bad file is retried next time."""
+    good = tmp_path / "good.ttl"
+    good.write_text(_VALID_TTL, encoding="utf-8")
+
+    g1, skipped1 = _load_graph([str(good)])
+    assert skipped1 == []
+    n = len(g1)
+    # second call (served from cache) yields the same triple count
+    g2, skipped2 = _load_graph([str(good)])
+    assert skipped2 == [] and len(g2) == n
+
+    # a set including a malformed file: loads the good triples, reports the bad
+    bad = tmp_path / "bad.ttl"
+    bad.write_text(_BAD_TTL, encoding="utf-8")
+    g3, skipped3 = _load_graph([str(good), str(bad)])
+    assert [s for s, _e in skipped3] == [str(bad)]
+    assert len(g3) >= n

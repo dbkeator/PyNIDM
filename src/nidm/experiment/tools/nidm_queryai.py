@@ -9,11 +9,14 @@ This tool uses a two-phase approach:
 """
 
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
+import pickle
 import re
 import sys
+import tempfile
 import click
 from rdflib import Graph, Literal, Namespace
 import requests
@@ -43,6 +46,88 @@ REPROSCHEMA = Namespace("http://schema.repronim.org/")
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "nidm_schema.json"
 
 # ---------------------------------------------------------------------------
+# Graph loading (tolerant parse + on-disk cache)
+# ---------------------------------------------------------------------------
+
+
+def _rdflib_format(source):
+    """Pick an rdflib parser format from a file path / URL suffix."""
+    s = source.lower().split("?")[0].split("#")[0]
+    if s.endswith((".jsonld", ".json")):
+        return "json-ld"
+    if s.endswith(".nt"):
+        return "nt"
+    if s.endswith((".rdf", ".owl", ".xml")):
+        return "xml"
+    if s.endswith(".n3"):
+        return "n3"
+    return "turtle"
+
+
+def _parse_into_graph(graph, nidm_files):
+    """Parse each source into *graph*, skipping (and collecting) any that fail.
+
+    A single malformed file therefore can't abort the whole query.  Returns a
+    list of ``(source, error)`` for the files that were skipped.
+    """
+    skipped = []
+    for f in nidm_files:
+        try:
+            graph.parse(f, format=_rdflib_format(f))
+        except Exception as e:  # malformed RDF, missing file, network error, ...
+            skipped.append((f, e))
+    return skipped
+
+
+def _graph_cache_path(nidm_files):
+    """Tempdir pickle path keyed on the file set + each file's mtime/size, so
+    the cache auto-invalidates whenever any input file changes."""
+    hasher = hashlib.md5()
+    for f in sorted(nidm_files):
+        hasher.update(f.encode("utf-8"))
+        try:
+            st = os.stat(f)
+            hasher.update(str((st.st_mtime_ns, st.st_size)).encode("utf-8"))
+        except OSError:
+            hasher.update(b"\x00")
+    return os.path.join(
+        tempfile.gettempdir(), f"pynidm_queryai_graph.{hasher.hexdigest()}.pickle"
+    )
+
+
+def _load_graph(nidm_files, use_cache=True):
+    """Parse *nidm_files* into one graph, with a tempdir pickle cache so repeat
+    queries over the same (unchanged) files skip parsing entirely.
+
+    Returns ``(graph, skipped)`` where *skipped* is the ``(source, error)``
+    list from :func:`_parse_into_graph`.  The cache is only written on a clean
+    load (nothing skipped) and is bypassed when any source is an ``http(s)``
+    URL (whose contents can't be cheaply checked for staleness).
+    """
+    has_url = any(
+        f.startswith("http://") or f.startswith("https://") for f in nidm_files
+    )
+    cache_path = None if has_url or not use_cache else _graph_cache_path(nidm_files)
+
+    if cache_path and os.path.isfile(cache_path):
+        try:
+            with open(cache_path, "rb") as fp:
+                return pickle.load(fp), []
+        except Exception:
+            pass  # corrupt / incompatible cache -> reparse
+
+    graph = Graph()
+    skipped = _parse_into_graph(graph, nidm_files)
+    if cache_path and not skipped:
+        try:
+            with open(cache_path, "wb") as fp:
+                pickle.dump(graph, fp)
+        except Exception:
+            pass  # caching is best-effort
+    return graph, skipped
+
+
+# ---------------------------------------------------------------------------
 # DataElement extraction
 # ---------------------------------------------------------------------------
 
@@ -54,9 +139,9 @@ def _extract_data_elements(nidm_files):
     is_about, source_variable, value_type, measure_of, laterality, unit,
     datum_type.
     """
-    g = Graph()
-    for f in nidm_files:
-        g.parse(f, format="turtle")
+    g, skipped = _load_graph(nidm_files)
+    for f, err in skipped:
+        click.echo(f"Warning: skipping unparsable NIDM file {f}: {err}", err=True)
 
     # Collect all DataElement URIs
     de_uris = set()
@@ -1023,12 +1108,13 @@ def _ensure_prefixes(sparql_query, prefixes):
     return header + "\n\n" + sparql_query
 
 
-def _execute_sparql(nidm_files, sparql_query):
-    """Execute a SPARQL query against the loaded NIDM files."""
-    g = Graph()
-    for f in nidm_files:
-        g.parse(f, format="turtle")
-    return g.query(sparql_query)
+def _execute_sparql(graph, sparql_query):
+    """Execute a SPARQL query against an already-loaded graph.
+
+    The graph is parsed once up front (and cached) by :func:`_load_graph`; we
+    reuse it here rather than re-parsing every file a second time.
+    """
+    return graph.query(sparql_query)
 
 
 _PREFIX_CONTRACTIONS = (
@@ -1394,7 +1480,7 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
 
         click.echo("Executing query...", err=True)
         try:
-            results = _execute_sparql(nidm_files, sparql_query)
+            results = _execute_sparql(g, sparql_query)
             # Consume the result once; render an aligned table for the terminal
             # and (optionally) write a proper CSV.
             columns, rows = _extract_rows(results)
