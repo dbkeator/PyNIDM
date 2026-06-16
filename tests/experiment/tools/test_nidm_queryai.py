@@ -1,12 +1,15 @@
 """Tests for nidm_queryai helpers that don't require an AI/API call."""
 
 from __future__ import annotations
+import csv
 from pathlib import Path
 from rdflib import Graph
 from nidm.experiment.tools.nidm_queryai import (
     _build_deterministic_sparql,
     _extract_data_elements,
+    _format_results,
     _looks_analytical,
+    _write_results_csv,
 )
 
 
@@ -231,3 +234,37 @@ def test_deterministic_query_joins_across_zero_padding_without_cartesian(
     r = by_sid["50773"]
     assert str(r["sex"]) == "Female"
     assert str(r["lh"]) == "300.0" and str(r["rh"]) == "400.0"
+
+
+# ---------------------------------------------------------------------------
+# Result rendering (aligned table) + CSV output
+# ---------------------------------------------------------------------------
+
+
+def test_format_results_marks_empty_cells_but_keeps_real_na() -> None:
+    """An UNBOUND cell renders as the '.' marker so wide sparse results stay
+    aligned, while a real literal value of 'n/a' is preserved verbatim."""
+    columns = ["subject_id", "lh_fsl", "lh_fs", "age"]
+    rows = [["51456", "3750.0", "", "n/a"]]  # lh_fs unbound; age literally "n/a"
+    table = _format_results(columns, rows)
+    lines = table.splitlines()
+    assert lines[0].split() == columns  # header
+    data = lines[2]
+    assert "3750.0" in data
+    assert "n/a" in data  # real literal kept
+    assert "." in data.split()  # unbound cell shown as the marker
+    # empty results
+    assert _format_results(columns, []) == "No results found."
+
+
+def test_write_results_csv_empty_fields_and_quoting(tmp_path: Path) -> None:
+    """CSV writes a true empty field for unbound cells (not the marker) and
+    round-trips values that need quoting."""
+    columns = ["a", "b", "c"]
+    rows = [["1", "", "x,y"]]  # empty unbound + a value containing a comma
+    out = tmp_path / "out.csv"
+    _write_results_csv(columns, rows, str(out))
+
+    parsed = list(csv.reader(out.open(newline="", encoding="utf-8")))
+    assert parsed[0] == columns
+    assert parsed[1] == ["1", "", "x,y"]

@@ -8,6 +8,7 @@ This tool uses a two-phase approach:
   Phase 2: AI generates a SPARQL query using the resolved, exact URIs.
 """
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ import click
 from rdflib import Graph, Literal, Namespace
 import requests
 from nidm.experiment.tools.click_base import cli
+from nidm.experiment.tools.nidm_file_utils import expand_nidm_file_list
 
 # ---------------------------------------------------------------------------
 # Namespace constants
@@ -1029,39 +1031,79 @@ def _execute_sparql(nidm_files, sparql_query):
     return g.query(sparql_query)
 
 
-def _format_results(results):
-    """Format SPARQL query results as a readable table."""
-    if not results:
-        return "No results found."
+_PREFIX_CONTRACTIONS = (
+    ("niiri:", "http://iri.nidash.org/"),
+    ("nidm:", "http://purl.org/nidash/nidm#"),
+    ("prov:", "http://www.w3.org/ns/prov#"),
+)
 
-    rows = list(results)
+# Marker printed in the aligned table for a cell that is UNBOUND (the variable
+# had no value for that subject), so it stays visually distinct from a real
+# literal value of "n/a".  Only used for terminal display; the CSV writes a
+# true empty field for unbound cells.
+_EMPTY_CELL = "."
+
+
+def _extract_rows(results):
+    """Return ``(columns, rows)`` from a SPARQL result, consumed ONCE.
+
+    *columns* is the list of variable names; *rows* is a list of lists of
+    display strings, with ``None`` (unbound) rendered as the empty string and
+    well-known namespaces contracted to their prefix.
+    """
+    columns = [str(v) for v in results.vars]
+    rows = []
+    for row in results:
+        cells = []
+        for v in results.vars:
+            val = row[v]
+            if val is None:
+                cells.append("")
+                continue
+            s = str(val)
+            for prefix, ns in _PREFIX_CONTRACTIONS:
+                if s.startswith(ns):
+                    s = prefix + s[len(ns) :]
+                    break
+            cells.append(s)
+        rows.append(cells)
+    return columns, rows
+
+
+def _format_results(columns, rows):
+    """Format extracted ``(columns, rows)`` as a column-aligned table.
+
+    Empty (unbound) cells are shown as ``_EMPTY_CELL`` so wide, sparse
+    multi-source results (e.g. FSL/ANTS/FreeSurfer columns where only one
+    pipeline is present) stay readable instead of collapsing in the terminal.
+    """
     if not rows:
         return "No results found."
 
-    vars_ = [str(v) for v in results.vars]
-    header = "\t".join(vars_)
-    lines = [header, "-" * len(header)]
+    disp = [[c if c != "" else _EMPTY_CELL for c in r] for r in rows]
+    widths = [len(c) for c in columns]
+    for r in disp:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], len(c))
 
-    for row in rows:
-        values = []
-        for v in results.vars:
-            val = row[v]
-            if val is not None:
-                val_str = str(val)
-                for prefix, ns in [
-                    ("niiri:", "http://iri.nidash.org/"),
-                    ("nidm:", "http://purl.org/nidash/nidm#"),
-                    ("prov:", "http://www.w3.org/ns/prov#"),
-                ]:
-                    if val_str.startswith(ns):
-                        val_str = prefix + val_str[len(ns) :]
-                        break
-                values.append(val_str)
-            else:
-                values.append("")
-        lines.append("\t".join(values))
+    def _line(cells):
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
 
+    lines = [_line(columns), "  ".join("-" * w for w in widths)]
+    lines.extend(_line(r) for r in disp)
     return "\n".join(lines)
+
+
+def _write_results_csv(columns, rows, path):
+    """Write extracted ``(columns, rows)`` to *path* as a proper CSV.
+
+    Unbound cells are written as empty fields (not the display marker), and
+    values are quoted as needed by :mod:`csv`.
+    """
+    with open(path, "w", newline="", encoding="utf-8") as fout:
+        writer = csv.writer(fout)
+        writer.writerow(columns)
+        writer.writerows(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1116,19 @@ def _format_results(results):
     "--nidm_file_list",
     "-nl",
     required=True,
-    help="A comma-separated list of NIDM files with full path.",
+    help="Comma-separated list of NIDM inputs.  Each entry may be a NIDM file "
+    "(.ttl/.jsonld), a directory (recursed for **/nidm.ttl), a manifest text "
+    "file (.txt/.list, one entry per line, # comments allowed), a glob, or an "
+    "http(s) URL.",
+)
+@click.option(
+    "--with_cdes",
+    "-wc",
+    is_flag=True,
+    default=False,
+    help="Also load the bundled FreeSurfer/FSL/ANTS CDE files (so brain-volume "
+    "data elements resolve without listing them).  Uses the local copy if "
+    "present, else downloads them.",
 )
 @click.option(
     "--question",
@@ -1090,7 +1144,7 @@ def _format_results(results):
     required=False,
     default=None,
     type=click.Path(),
-    help="Optional output file for results (TSV format).",
+    help="Optional output file for results (CSV format).",
 )
 @click.option(
     "--show_query",
@@ -1111,7 +1165,7 @@ def _format_results(results):
     "'retrieve these variables' questions and the AI for analytical ones "
     "(counts, averages, group-by, filtering).",
 )
-def queryai(nidm_file_list, question, output_file, show_query, mode):
+def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
     """AI-assisted natural-language query of NIDM files.
 
     Uses a two-phase approach:
@@ -1134,10 +1188,22 @@ def queryai(nidm_file_list, question, output_file, show_query, mode):
       pynidm queryai -nl data/nidm.ttl   (interactive mode)
     """
 
-    # Parse file list
-    nidm_files = [f.strip() for f in nidm_file_list.split(",") if f.strip()]
+    # Expand the file list: entries may be files, directories (recursed for
+    # **/nidm.ttl), manifest text files, globs, or URLs; optionally append the
+    # bundled CDE files.
+    nidm_files = expand_nidm_file_list(nidm_file_list, include_cdes=with_cdes)
+    if not nidm_files:
+        click.echo(
+            f"Error: no NIDM files found from -nl '{nidm_file_list}' "
+            "(check the path, directory, or manifest).",
+            err=True,
+        )
+        sys.exit(1)
     for f in nidm_files:
-        if not os.path.isfile(f):
+        # URLs are fetched by rdflib at parse time; only local paths are checked.
+        if not (
+            f.startswith("http://") or f.startswith("https://")
+        ) and not os.path.isfile(f):
             click.echo(f"Error: File not found: {f}", err=True)
             sys.exit(1)
 
@@ -1329,13 +1395,17 @@ def queryai(nidm_file_list, question, output_file, show_query, mode):
         click.echo("Executing query...", err=True)
         try:
             results = _execute_sparql(nidm_files, sparql_query)
-            formatted = _format_results(results)
-            click.echo(f"\nResults:\n{formatted}")
+            # Consume the result once; render an aligned table for the terminal
+            # and (optionally) write a proper CSV.
+            columns, rows = _extract_rows(results)
+            click.echo(f"\nResults:\n{_format_results(columns, rows)}")
 
             if output_file:
-                with open(output_file, "w", encoding="utf-8") as fout:
-                    fout.write(formatted)
-                click.echo(f"\nResults written to {output_file}", err=True)
+                _write_results_csv(columns, rows, output_file)
+                click.echo(
+                    f"\nResults written to {output_file} (CSV, " f"{len(rows)} row(s))",
+                    err=True,
+                )
 
         except Exception as e:
             click.echo(f"\nSPARQL execution error: {e}", err=True)

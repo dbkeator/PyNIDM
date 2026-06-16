@@ -558,11 +558,17 @@ option is required (the group is mutually exclusive).
     Usage: pynidm query [OPTIONS]
 
     Options:
-      -nl, --nidm_file_list TEXT      A comma separated list of NIDM files with
-                                      full path  [required]
+      -nl, --nidm_file_list TEXT      Comma-separated NIDM inputs.  Each entry
+                                      may be a NIDM file, a directory (recursed
+                                      for **/nidm.ttl), a manifest text file
+                                      (.txt/.list, one entry per line), a glob,
+                                      or an http(s) URL  [required]
       -nc, --cde_file_list TEXT       A comma separated list of NIDM CDE files
                                       with full path. Can also be set in the
                                       CDE_DIR environment variable
+      -wc, --with_cdes                Seed the CDE cache with the bundled
+                                      FreeSurfer/FSL/ANTS CDE files (no -nc
+                                      needed)
 
       Query Type (pick exactly one):
       -q, --query_file FILENAME       Text file containing a SPARQL query to
@@ -625,12 +631,18 @@ offline use.  It uses a two-phase approach:
    Usage: pynidm queryai [OPTIONS]
 
    Options:
-     -nl, --nidm_file_list TEXT  A comma separated list of NIDM files with
-                                 full path  [required]
+     -nl, --nidm_file_list TEXT  Comma-separated NIDM inputs.  Each entry may be
+                                 a NIDM file, a directory (recursed for
+                                 **/nidm.ttl), a manifest text file (.txt/.list,
+                                 one entry per line, # comments allowed), a glob,
+                                 or an http(s) URL  [required]
+     -wc, --with_cdes            Also load the bundled FreeSurfer/FSL/ANTS CDE
+                                 files so brain-volume data elements resolve
+                                 without listing them
      -q, --question TEXT         Natural-language question to ask about the
                                  NIDM data. If not provided, enters
                                  interactive mode.
-     -o, --output_file PATH      Optional output file for results (TSV format)
+     -o, --output_file PATH      Optional output file for results (CSV format)
      -s, --show_query            Show the generated SPARQL query before
                                  executing it
      -m, --mode [auto|deterministic|llm]
@@ -641,6 +653,20 @@ offline use.  It uses a two-phase approach:
                                  the deterministic builder for plain retrieval
                                  questions and the AI for analytical ones.
      --help                      Show this message and exit.
+
+**Supplying many NIDM files.**  Instead of a long comma-separated path list,
+``-nl`` accepts a directory (recursed for ``**/nidm.ttl``), a manifest text file
+(one path / directory / glob / URL per line, ``#`` comments allowed), a shell
+glob, or an ``http(s)`` URL — entries may be mixed and are de-duplicated.  Add
+``-wc`` to pull in the bundled FreeSurfer/FSL/ANTS CDE files automatically:
+
+.. code:: bash
+
+   # every per-subject file under a study tree, plus the CDEs, in one shot
+   pynidm queryai -nl /data/abide/derivatives -wc -q "Retrieve age, sex, and left and right hippocampus volume"
+
+   # or a manifest file listing files/dirs/URLs
+   pynidm queryai -nl nidm_files.txt -wc -q "..."
 
 **Prerequisites — choose an LLM provider.**  ``queryai`` can use a cloud API
 (Anthropic or OpenAI) or an optional local LLM server, so it can run fully
