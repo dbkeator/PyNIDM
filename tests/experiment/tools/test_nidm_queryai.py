@@ -6,6 +6,7 @@ from pathlib import Path
 from rdflib import Graph
 from nidm.experiment.tools.nidm_queryai import (
     _build_deterministic_sparql,
+    _ensure_prefixes,
     _extract_data_elements,
     _format_results,
     _load_graph,
@@ -337,3 +338,31 @@ def test_load_graph_caches_clean_load_and_skips_cache_on_error(
     g3, skipped3 = _load_graph([str(good), str(bad)])
     assert [s for s, _e in skipped3] == [str(bad)]
     assert len(g3) >= n
+
+
+def test_load_graph_cache_preserves_namespace_bindings(tmp_path: Path) -> None:
+    """Regression: a cache HIT must still expose the file's @prefix bindings
+    (pickling an rdflib Graph drops them), otherwise prefixes like dct: fail to
+    resolve at query time."""
+    ttl = tmp_path / "x.ttl"
+    ttl.write_text(
+        "@prefix dct: <http://purl.org/dc/terms/> .\n"
+        "@prefix ex: <http://example.org/> .\n"
+        'ex:a dct:title "t" .\n',
+        encoding="utf-8",
+    )
+    _load_graph([str(ttl)])  # parse + write cache
+    g2, _skipped = _load_graph([str(ttl)])  # served from cache
+    bound = {p: str(u) for p, u in g2.namespaces()}
+    assert bound.get("dct") == "http://purl.org/dc/terms/"
+
+
+def test_ensure_prefixes_falls_back_to_well_known() -> None:
+    """A prefix the model used that no loaded file bound (e.g. dct) is still
+    injected from the well-known table; a graph's own binding takes precedence."""
+    query = "SELECT ?t WHERE { ?s dct:title ?t }"
+    out = _ensure_prefixes(query, {})  # no graph bindings at all
+    assert "PREFIX dct: <http://purl.org/dc/terms/>" in out
+    # graph binding wins over the well-known fallback
+    out2 = _ensure_prefixes(query, {"dct": "http://example.org/custom#"})
+    assert "PREFIX dct: <http://example.org/custom#>" in out2

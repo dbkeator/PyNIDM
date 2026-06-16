@@ -90,8 +90,10 @@ def _graph_cache_path(nidm_files):
             hasher.update(str((st.st_mtime_ns, st.st_size)).encode("utf-8"))
         except OSError:
             hasher.update(b"\x00")
+    # The "v2" tag invalidates older cache files that stored the graph alone
+    # (without its namespace bindings, which pickling an rdflib Graph drops).
     return os.path.join(
-        tempfile.gettempdir(), f"pynidm_queryai_graph.{hasher.hexdigest()}.pickle"
+        tempfile.gettempdir(), f"pynidm_queryai_graph_v2.{hasher.hexdigest()}.pickle"
     )
 
 
@@ -103,6 +105,11 @@ def _load_graph(nidm_files, use_cache=True):
     list from :func:`_parse_into_graph`.  The cache is only written on a clean
     load (nothing skipped) and is bypassed when any source is an ``http(s)``
     URL (whose contents can't be cheaply checked for staleness).
+
+    The namespace bindings are cached *separately* and re-applied on load,
+    because pickling an rdflib ``Graph`` does NOT preserve them -- without this
+    a cache hit would yield a graph that can't resolve prefixes like ``dct:``
+    at query time.
     """
     has_url = any(
         f.startswith("http://") or f.startswith("https://") for f in nidm_files
@@ -112,7 +119,12 @@ def _load_graph(nidm_files, use_cache=True):
     if cache_path and os.path.isfile(cache_path):
         try:
             with open(cache_path, "rb") as fp:
-                return pickle.load(fp), []
+                obj = pickle.load(fp)
+            if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], Graph):
+                graph, namespaces = obj
+                for prefix, uri in namespaces:
+                    graph.bind(prefix, uri, replace=True)
+                return graph, []
         except Exception:
             pass  # corrupt / incompatible cache -> reparse
 
@@ -121,7 +133,7 @@ def _load_graph(nidm_files, use_cache=True):
     if cache_path and not skipped:
         try:
             with open(cache_path, "wb") as fp:
-                pickle.dump(graph, fp)
+                pickle.dump((graph, list(graph.namespaces())), fp)
         except Exception:
             pass  # caching is best-effort
     return graph, skipped
@@ -1084,6 +1096,27 @@ def _extract_sparql(ai_response):
     return None
 
 
+# Well-known prefixes the LLM commonly emits.  Used as a fallback so a query
+# using e.g. ``dct:`` still resolves even if no loaded file (or a namespace-
+# stripped cache) bound it.  The graph's own bindings take precedence.
+_WELL_KNOWN_PREFIXES = {
+    "dct": "http://purl.org/dc/terms/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "dctypes": "http://purl.org/dc/dcmitype/",
+    "dcmitype": "http://purl.org/dc/dcmitype/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "nidm": "http://purl.org/nidash/nidm#",
+    "niiri": "http://iri.nidash.org/",
+    "ndar": "https://ndar.nih.gov/api/datadictionary/v2/dataelement/",
+}
+
+
 def _ensure_prefixes(sparql_query, prefixes):
     """Prepend ``PREFIX`` declarations for any prefix used in
     *sparql_query* but not already declared, so the query is
@@ -1092,19 +1125,22 @@ def _ensure_prefixes(sparql_query, prefixes):
     rdflib resolves undeclared prefixes from the graph's namespace
     bindings at execution time, so queries run inside pynidm even without
     a PREFIX block -- but they aren't portable.  *prefixes* is the
-    ``{prefix: uri}`` map from :func:`_extract_namespace_prefixes`.
+    ``{prefix: uri}`` map from :func:`_extract_namespace_prefixes`; any
+    well-known prefix not already in it is added as a fallback so a prefix
+    the model used that no loaded file bound still resolves.
     """
+    resolved = {**_WELL_KNOWN_PREFIXES, **prefixes}  # graph bindings win
     declared = set(
         re.findall(r"(?im)^\s*PREFIX\s+([A-Za-z][\w.\-]*)\s*:", sparql_query)
     )
     missing = [
         p
-        for p, uri in prefixes.items()
+        for p, uri in resolved.items()
         if p not in declared and re.search(rf"(?<![<\w]){re.escape(p)}:", sparql_query)
     ]
     if not missing:
         return sparql_query
-    header = "\n".join(f"PREFIX {p}: <{prefixes[p]}>" for p in sorted(missing))
+    header = "\n".join(f"PREFIX {p}: <{resolved[p]}>" for p in sorted(missing))
     return header + "\n\n" + sparql_query
 
 
