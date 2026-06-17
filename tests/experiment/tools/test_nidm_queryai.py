@@ -6,11 +6,15 @@ from pathlib import Path
 from rdflib import Graph
 from nidm.experiment.tools.nidm_queryai import (
     _build_deterministic_sparql,
+    _build_enumeration_sparql,
+    _coalesce_selected_des,
     _ensure_prefixes,
     _extract_data_elements,
     _format_results,
     _load_graph,
     _looks_analytical,
+    _looks_like_subject_enumeration,
+    _mentions_project_or_site,
     _parse_into_graph,
     _rdflib_format,
     _write_results_csv,
@@ -181,6 +185,104 @@ def test_build_deterministic_sparql_anchors_each_var_and_maps_only_from_levels()
     assert "?age_code" not in q and "?left_hippocampus_volume_code" not in q
     # full URIs used as predicates (portable, no prefix guessing)
     assert "<http://x/AGE>" in q and "<http://x/fs_LH>" in q
+
+
+def test_coalesce_collapses_per_file_replicas_of_same_variable() -> None:
+    """The same concept replicated as a different per-file URI (the ABIDE
+    age/sex case) collapses into ONE variable whose `uris` lists every replica
+    -- not N separate columns."""
+    age = [
+        {
+            "qname": f"niiri:AGE_{x}",
+            "uri": f"http://iri.nidash.org/AGE_{x}",
+            "source_variable": "AGE_AT_SCAN",
+            "is_about": "ilx:age",
+            "label": "age at scan",
+        }
+        for x in "abc"
+    ]
+    out = _coalesce_selected_des("age", "demographic", age)
+    assert len(out) == 1
+    assert out[0]["name"] == "age"
+    assert len(out[0]["uris"]) == 3
+
+
+def test_coalesce_keeps_distinct_pipeline_sources_separate() -> None:
+    """FSL/ANTS/FreeSurfer measures of the same region are genuinely different
+    sources (distinct namespace/unit) and stay as separate, suffixed columns."""
+    hip = [
+        {
+            "qname": "fsl:fsl_10",
+            "uri": "http://f/10",
+            "label": "L-Hipp",
+            "unit": "mm^3",
+            "laterality": "Left",
+        },
+        {
+            "qname": "ants:ants_40",
+            "uri": "http://a/40",
+            "label": "L-Hipp",
+            "unit": "mm^3",
+            "laterality": "Left",
+        },
+        {
+            "qname": "fs:fs_3343",
+            "uri": "http://s/3343",
+            "label": "L-Hipp",
+            "unit": "mm^3",
+            "laterality": "Left",
+        },
+    ]
+    out = _coalesce_selected_des("left hippocampus volume", "measurement", hip)
+    assert len(out) == 3
+    assert [o["name"] for o in out] == [
+        "left hippocampus volume (fsl)",
+        "left hippocampus volume (ants)",
+        "left hippocampus volume (fs)",
+    ]
+
+
+def test_build_deterministic_sparql_alternates_multi_uri_into_one_column() -> None:
+    """A variable carrying multiple URIs (per-file replicas) becomes ONE column
+    matched by predicate-alternation, not one OPTIONAL block per URI."""
+    q = _build_deterministic_sparql(
+        [
+            {
+                "name": "age",
+                "uris": ["http://x/AGE_a", "http://x/AGE_b", "http://x/AGE_c"],
+            },
+            {"name": "sex", "uri": "http://x/SEX"},
+        ]
+    )
+    assert q.count("OPTIONAL {") == 2
+    assert "(<http://x/AGE_a>|<http://x/AGE_b>|<http://x/AGE_c>) ?age" in q
+    select_line = q.split("SELECT ", 1)[1].splitlines()[0]
+    assert select_line.split() == ["?subject_id", "?age", "?sex"]
+
+
+def test_build_deterministic_sparql_isabout_anchor_for_shared_concept() -> None:
+    """When per-file replicas share an isAbout concept, match ANY DataElement
+    about that concept (covers all sites / future files) instead of listing
+    every per-file URI; a single specific pick still uses its exact URI."""
+    q = _build_deterministic_sparql(
+        [
+            {
+                "name": "age",
+                "is_about": "http://uri.interlex.org/ilx_0100400",
+                "uris": ["http://x/AGE_a", "http://x/AGE_b", "http://x/AGE_c"],
+            },
+            {"name": "left pallidum volume", "uri": "http://x/fsl_pallidum"},
+        ]
+    )
+    # age: isAbout-anchored, variable predicate, no per-file URIs listed
+    assert (
+        "?de_0 <http://purl.org/nidash/nidm#isAbout> "
+        "<http://uri.interlex.org/ilx_0100400>" in q
+    )
+    assert "?e_0 ?de_0 ?age" in q
+    assert "AGE_a" not in q
+    # the specific single pick keeps its exact URI
+    assert "<http://x/fsl_pallidum> ?left_pallidum_volume" in q
 
 
 def test_deterministic_query_joins_across_zero_padding_without_cartesian(
@@ -366,3 +468,55 @@ def test_ensure_prefixes_falls_back_to_well_known() -> None:
     # graph binding wins over the well-known fallback
     out2 = _ensure_prefixes(query, {"dct": "http://example.org/custom#"})
     assert "PREFIX dct: <http://example.org/custom#>" in out2
+
+
+# ---------------------------------------------------------------------------
+# Subject enumeration (deterministic, DISTINCT)
+# ---------------------------------------------------------------------------
+
+
+def test_subject_enumeration_intent_detection() -> None:
+    enum = "List all subjects by ABIDE project name where you can find the site"
+    assert _looks_like_subject_enumeration(enum) is True
+    assert _mentions_project_or_site(enum) is True
+    assert _looks_like_subject_enumeration("list all subjects") is True
+    assert _mentions_project_or_site("list all subjects") is False
+    # not enumeration: a variable retrieval
+    assert _looks_like_subject_enumeration("retrieve age and sex") is False
+
+
+def test_enumeration_query_groups_distinct_subjects_no_dup(tmp_path: Path) -> None:
+    """The grouped enumeration must return ONE row per (project, subject) even
+    when a subject has multiple acquisitions -- the duplicate-row bug the LLM
+    query hit."""
+    ttl = (
+        "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+        "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+        "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+        "@prefix dct: <http://purl.org/dc/terms/> .\n"
+        "@prefix dcmitype: <http://purl.org/dc/dcmitype/> .\n"
+        "@prefix niiri: <http://iri.nidash.org/> .\n"
+        'niiri:proj a nidm:Project ; dcmitype:title "ABIDE - X" .\n'
+        "niiri:sess dct:isPartOf niiri:proj .\n"
+        'niiri:p a prov:Person ; ndar:src_subject_id "50001" .\n'
+        # TWO acquisitions for the same subject (would duplicate without DISTINCT)
+        "niiri:acq1 dct:isPartOf niiri:sess ; "
+        "prov:qualifiedAssociation [ prov:agent niiri:p ] .\n"
+        "niiri:acq2 dct:isPartOf niiri:sess ; "
+        "prov:qualifiedAssociation [ prov:agent niiri:p ] .\n"
+    )
+    f = tmp_path / "study.ttl"
+    f.write_text(ttl, encoding="utf-8")
+    g = Graph()
+    g.parse(f, format="turtle")
+
+    rows = list(g.query(_build_enumeration_sparql(group_by_project=True)))
+    assert len(rows) == 1, [tuple(map(str, r)) for r in rows]
+    assert str(rows[0][0]) == "ABIDE - X"
+    assert str(rows[0][1]) == "50001"
+
+    # plain enumeration: one row per subject, DISTINCT in the text
+    plain = _build_enumeration_sparql(group_by_project=False)
+    assert "SELECT DISTINCT ?subject_id" in plain
+    rows2 = list(g.query(plain))
+    assert [str(r[0]) for r in rows2] == ["50001"]

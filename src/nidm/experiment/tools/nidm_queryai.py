@@ -725,6 +725,13 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
      (e.g. `?sex`).
    - Use only SPARQL 1.1 built-ins (IF, COALESCE, BIND, FILTER, COUNT, etc.).
 
+10. **Use `SELECT DISTINCT` for enumerations.**  A subject is linked to MANY
+    activities (each scan/assessment is its own acquisition), so joining a
+    subject to a project/session/acquisition without `DISTINCT` repeats the
+    subject once per activity.  When listing subjects (optionally by site /
+    project) select only the columns asked for and use `SELECT DISTINCT`, so
+    each subject appears once.
+
 ## Available Prefixes
 ```sparql
 {prefix_block}
@@ -802,11 +809,68 @@ def _value_map_if_chain(code_var, levels):
     return expr
 
 
+def _coalesce_selected_des(name, role, selected_list):
+    """Turn the DataElements chosen for one concept into resolved-variable
+    entries, collapsing per-file replicas of the SAME logical variable.
+
+    In multi-file datasets the same concept (e.g. age) is frequently a DIFFERENT
+    URI in each NIDM record.  DEs that share (sourceVariable|label, isAbout,
+    namespace prefix, unit, measureOf, laterality) are treated as one variable
+    whose ``uris`` lists every replica (matched later by predicate-alternation
+    into a single column).  DEs that differ on those fields -- e.g. FSL vs ANTS
+    vs FreeSurfer hippocampus -- remain separate columns, suffixed by namespace.
+    Returns a list of resolved-variable dicts.
+    """
+    groups = {}
+    order = []
+    for de in selected_list:
+        qname = de.get("qname", de["uri"])
+        prefix = qname.split(":")[0] if ":" in qname else ""
+        key = (
+            de.get("source_variable") or de.get("label") or "",
+            de.get("is_about") or "",
+            prefix,
+            de.get("unit") or "",
+            de.get("measure_of") or "",
+            de.get("laterality") or "",
+        )
+        if key not in groups:
+            groups[key] = {"uris": [], "rep": de, "prefix": prefix}
+            order.append(key)
+        groups[key]["uris"].append(de["uri"])
+        # prefer a representative DE that actually defines value levels
+        if de.get("levels") and not groups[key]["rep"].get("levels"):
+            groups[key]["rep"] = de
+
+    multi = len(order) > 1
+    out = []
+    for key in order:
+        grp = groups[key]
+        rep = grp["rep"]
+        out.append(
+            {
+                "name": f"{name} ({grp['prefix']})" if multi else name,
+                "role": role,
+                "qname": rep.get("qname", rep["uri"]),
+                "uri": rep["uri"],
+                "uris": grp["uris"],
+                "is_about": rep.get("is_about"),
+                "label": rep.get("label"),
+                "laterality": rep.get("laterality"),
+                "unit": rep.get("unit"),
+                "levels": rep.get("levels"),
+            }
+        )
+    return out
+
+
 def _build_deterministic_sparql(resolved_vars):
     """Build a person-anchored, zero-pad-tolerant SELECT from resolved DE URIs.
 
-    *resolved_vars* is a list of dicts each with at least ``uri`` and ``name``;
-    an optional ``levels`` dict triggers coded->label mapping for that column.
+    *resolved_vars* is a list of dicts each with at least ``name`` and either a
+    single ``uri`` or a ``uris`` list (the same logical variable replicated as a
+    different URI per file -> matched by predicate-alternation into one column).
+    An optional ``levels`` dict triggers coded->label mapping for that column.
     Returns the SPARQL string (one row per subject, ordered by subject id).
     """
     used = {"subject_id", "sid_raw", "p"}
@@ -815,6 +879,8 @@ def _build_deterministic_sparql(resolved_vars):
     for i, v in enumerate(resolved_vars):
         col = _sparql_var_name(v.get("name", f"var_{i}"), used)
         ent, per, sid = f"e_{i}", f"p_{i}", f"s_{i}"
+        uris = v.get("uris") or [v["uri"]]
+        is_about = v.get("is_about")
         levels = v.get("levels")
         if levels:
             code_var = f"?{col}_code"
@@ -823,9 +889,30 @@ def _build_deterministic_sparql(resolved_vars):
         else:
             obj = f"?{col}"
             map_line = ""
+
+        if len(uris) > 1 and is_about:
+            # Several per-file replicas of ONE variable that share an isAbout
+            # concept: match any DataElement about that concept (covers all
+            # sites + future files) instead of listing every per-file URI.
+            de_var = f"?de_{i}"
+            pattern = (
+                f"    {de_var} <http://purl.org/nidash/nidm#isAbout> "
+                f"<{is_about}> .\n"
+                f"    ?{ent} {de_var} {obj} ;\n"
+            )
+        else:
+            # A single, specific DataElement (the user's exact pick), or
+            # replicas without a shared concept: match the URI(s) directly.
+            predicate = (
+                f"<{uris[0]}>"
+                if len(uris) == 1
+                else "(" + "|".join(f"<{u}>" for u in uris) + ")"
+            )
+            pattern = f"    ?{ent} {predicate} {obj} ;\n"
+
         blocks.append(
             "  OPTIONAL {\n"
-            f"    ?{ent} <{v['uri']}> {obj} ;\n"
+            f"{pattern}"
             f"         prov:wasGeneratedBy/prov:qualifiedAssociation/prov:agent ?{per} .\n"
             f"    ?{per} ndar:src_subject_id ?{sid} .\n"
             f'    FILTER(REPLACE(STR(?{sid}), "^0+", "") = ?subject_id)\n'
@@ -874,6 +961,67 @@ def _looks_analytical(question):
     is handled by the deterministic builder.
     """
     return bool(_ANALYTIC_RE.search(question or ""))
+
+
+# Subject-enumeration intent: "list/show/all ... subjects/participants",
+# optionally grouped by the study/site/project.  Handled by a deterministic,
+# DISTINCT, person-anchored query (no LLM) -- this is the dominant "who is in
+# this dataset" question and the LLM tends to emit a DISTINCT-less join that
+# repeats each subject once per acquisition.
+_ENUMERATION_VERB_RE = re.compile(
+    r"(?i)\b(list|show|display|enumerate|give|get|retrieve|find|all|every|"
+    r"which|what|who)\b"
+)
+_SUBJECT_RE = re.compile(r"(?i)\b(subject|participant)s?\b")
+_PROJECT_SITE_RE = re.compile(r"(?i)\b(project|site|study|dataset|cohort)\b")
+
+
+def _looks_like_subject_enumeration(question):
+    """True for a plain "list the subjects [by site/project]" question."""
+    q = question or ""
+    return bool(_SUBJECT_RE.search(q) and _ENUMERATION_VERB_RE.search(q))
+
+
+def _mentions_project_or_site(question):
+    """True if the question asks to group/label subjects by study/site/project."""
+    return bool(_PROJECT_SITE_RE.search(question or ""))
+
+
+def _build_enumeration_sparql(group_by_project=False):
+    """Deterministic subject enumeration.
+
+    Without grouping: one row per distinct subject id.  With grouping: one row
+    per (project title, subject id), joining the subject to its
+    ``nidm:Project`` through the PROV/``dct:isPartOf`` backbone.  ``DISTINCT``
+    collapses the per-acquisition multiplicity that makes the LLM query repeat
+    each subject.
+    """
+    if not group_by_project:
+        return (
+            "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n\n"
+            "SELECT DISTINCT ?subject_id\n"
+            "WHERE {\n"
+            "  ?person ndar:src_subject_id ?subject_id .\n"
+            "}\n"
+            "ORDER BY ?subject_id\n"
+        )
+    return (
+        "PREFIX prov: <http://www.w3.org/ns/prov#>\n"
+        "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n"
+        "PREFIX nidm: <http://purl.org/nidash/nidm#>\n"
+        "PREFIX dct: <http://purl.org/dc/terms/>\n"
+        "PREFIX dcmitype: <http://purl.org/dc/dcmitype/>\n\n"
+        "SELECT DISTINCT ?project_title ?subject_id\n"
+        "WHERE {\n"
+        "  ?person ndar:src_subject_id ?subject_id .\n"
+        "  ?assoc prov:agent ?person .\n"
+        "  ?activity prov:qualifiedAssociation ?assoc ;\n"
+        "            dct:isPartOf+ ?project .\n"
+        "  ?project a nidm:Project ;\n"
+        "           dcmitype:title ?project_title .\n"
+        "}\n"
+        "ORDER BY ?project_title ?subject_id\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1415,31 +1563,7 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
                     click.echo(f"  Skipping '{name}'.", err=True)
                     continue
 
-            for selected in selected_list:
-                # When multiple DEs are chosen for the same concept,
-                # give each a distinct name so the AI creates separate
-                # SPARQL variables (e.g. left_hippocampus_volume_fs,
-                # left_hippocampus_volume_ants).
-                if len(selected_list) > 1:
-                    suffix = selected.get("qname", "").split(":")[0]
-                    var_name = f"{name} ({suffix})"
-                else:
-                    var_name = name
-
-                resolved_vars.append(
-                    {
-                        "name": var_name,
-                        "role": role,
-                        "qname": selected.get("qname", selected["uri"]),
-                        "uri": selected["uri"],
-                        "label": selected.get("label"),
-                        "laterality": selected.get("laterality"),
-                        "unit": selected.get("unit"),
-                        # value levels (coded -> label), if defined in the data;
-                        # the ONLY licensed source for a coded-value mapping
-                        "levels": selected.get("levels"),
-                    }
-                )
+            resolved_vars.extend(_coalesce_selected_des(name, role, selected_list))
 
         # Show resolved variables
         click.echo("\nResolved variables:", err=True)
@@ -1457,22 +1581,25 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
         # Only resolved vars that have URIs can be queried as predicates.
         vars_with_uris = [v for v in resolved_vars if v.get("uri")]
 
-        # Decide how to build the query.  The deterministic builder handles the
-        # common per-subject retrieval intent reproducibly; the AI handles
-        # analytical questions (counts/averages/group-by/filtering) and any
-        # case where no variable resolved to a URI.
-        use_deterministic = mode == "deterministic" or (
-            mode == "auto" and vars_with_uris and not _looks_analytical(q)
+        # Decide how to build the query (unless the user forced the LLM):
+        #  * per-subject RETRIEVAL of resolved DataElement variables, or
+        #  * subject ENUMERATION ("list the subjects [by site/project]"), or
+        #  * fall back to the AI for analytical / free-form questions.
+        analytical = _looks_analytical(q)
+        use_retrieval = (
+            (mode in ("auto", "deterministic"))
+            and vars_with_uris
+            and (mode == "deterministic" or not analytical)
         )
-        if mode == "deterministic" and not vars_with_uris:
-            click.echo(
-                "  No variables resolved to URIs; cannot build a deterministic "
-                "query.  Falling back to the AI.",
-                err=True,
-            )
-            use_deterministic = False
+        use_enumeration = (
+            mode != "llm"
+            and not use_retrieval
+            and not vars_with_uris
+            and not analytical
+            and _looks_like_subject_enumeration(q)
+        )
 
-        if use_deterministic:
+        if use_retrieval:
             click.echo(
                 "\nPhase 2: Building deterministic SPARQL (person-anchored, "
                 "no LLM)...",
@@ -1493,7 +1620,22 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
                     f"{', '.join(raw)}",
                     err=True,
                 )
+        elif use_enumeration:
+            group = _mentions_project_or_site(q)
+            click.echo(
+                "\nPhase 2: Building deterministic subject-enumeration query "
+                f"({'grouped by project/site, ' if group else ''}DISTINCT, "
+                "no LLM)...",
+                err=True,
+            )
+            sparql_query = _build_enumeration_sparql(group_by_project=group)
         else:
+            if mode == "deterministic":
+                click.echo(
+                    "  No deterministic pattern matched (not a plain variable "
+                    "retrieval or subject enumeration); falling back to the AI.",
+                    err=True,
+                )
             click.echo("\nPhase 2: Generating SPARQL query (AI)...", err=True)
             system_prompt = _build_sparql_prompt(vars_with_uris, prefixes, projects)
             ai_response = _send_to_ai(system_prompt, q)
