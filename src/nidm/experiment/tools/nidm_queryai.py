@@ -18,7 +18,7 @@ import re
 import sys
 import tempfile
 import click
-from rdflib import Graph, Literal, Namespace
+from rdflib import Graph, Literal, Namespace, URIRef
 import requests
 from nidm.experiment.tools.click_base import cli
 from nidm.experiment.tools.nidm_file_utils import expand_nidm_file_list
@@ -79,6 +79,34 @@ def _parse_into_graph(graph, nidm_files):
     return skipped
 
 
+# Internal predicate: a per-person, leading-zero-stripped copy of
+# ndar:src_subject_id materialized at load time.  Cross-file subject joins then
+# become an INDEXED term match (`?p <norm> ?subject_id`) instead of a
+# non-indexable `FILTER(REPLACE(STR(?id), "^0+", "") = ?subject_id)` -- the
+# difference between a hash/index join and a per-row nested-loop scan, which is
+# what made the multi-file deterministic query crawl (and is unindexable in any
+# engine, Oxigraph included).
+_NORM_SID_URI = "http://pynidm.org/queryai#normalized_subject_id"
+_NDAR_SID_URI = "https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id"
+
+
+def _normalize_subject_id(raw):
+    """Strip leading zeros (keeping at least one character) so '0050772' and
+    '50772' collapse to the same key across files."""
+    return re.sub(r"^0+(?=.)", "", str(raw))
+
+
+def _materialize_normalized_ids(graph):
+    """Add ``(person, _NORM_SID_URI, normalized id)`` for every
+    ``ndar:src_subject_id`` in *graph*.  Idempotent, so it is safe on a freshly
+    parsed or a cache-loaded graph.  Returns *graph*."""
+    norm = URIRef(_NORM_SID_URI)
+    sid = URIRef(_NDAR_SID_URI)
+    for person, raw in list(graph.subject_objects(sid)):
+        graph.add((person, norm, Literal(_normalize_subject_id(raw))))
+    return graph
+
+
 def _graph_cache_path(nidm_files):
     """Tempdir pickle path keyed on the file set + each file's mtime/size, so
     the cache auto-invalidates whenever any input file changes."""
@@ -97,6 +125,34 @@ def _graph_cache_path(nidm_files):
     )
 
 
+def _make_graph():
+    """Create the backing graph, preferring the Oxigraph (Rust) SPARQL engine
+    when available.
+
+    rdflib's built-in SPARQL engine is pure-Python with no query optimizer, so
+    multi-OPTIONAL / property-path queries over a large merged graph are slow.
+    If the optional ``oxrdflib`` package is installed, the same rdflib API runs
+    queries through Oxigraph's optimized engine instead.  Selected by
+    ``PYNIDM_QUERYAI_ENGINE`` (``auto`` (default) | ``oxigraph`` | ``rdflib``).
+    Returns ``(graph, engine_name)``.
+    """
+    requested = os.environ.get("PYNIDM_QUERYAI_ENGINE", "auto").strip().lower()
+    if requested in ("auto", "oxigraph"):
+        try:
+            import oxrdflib  # noqa: F401
+
+            return Graph(store="Oxigraph"), "oxigraph"
+        except Exception:
+            if requested == "oxigraph":
+                click.echo(
+                    "Warning: PYNIDM_QUERYAI_ENGINE=oxigraph but the 'oxrdflib' "
+                    "package isn't installed; using rdflib.  "
+                    "Install with: pip install oxrdflib",
+                    err=True,
+                )
+    return Graph(), "rdflib"
+
+
 def _load_graph(nidm_files, use_cache=True):
     """Parse *nidm_files* into one graph, with a tempdir pickle cache so repeat
     queries over the same (unchanged) files skip parsing entirely.
@@ -111,11 +167,24 @@ def _load_graph(nidm_files, use_cache=True):
     a cache hit would yield a graph that can't resolve prefixes like ``dct:``
     at query time.
     """
+    graph, engine = _make_graph()
+    if engine == "oxigraph":
+        click.echo("queryai: using the Oxigraph SPARQL engine.", err=True)
+
     has_url = any(
         f.startswith("http://") or f.startswith("https://") for f in nidm_files
     )
-    cache_path = None if has_url or not use_cache else _graph_cache_path(nidm_files)
+    # The pickle cache only applies to the default in-memory rdflib store; the
+    # Oxigraph store can't be pickled, and its Rust parser is fast enough to
+    # re-read each run.
+    cache_path = (
+        None
+        if has_url or not use_cache or engine != "rdflib"
+        else _graph_cache_path(nidm_files)
+    )
 
+    skipped = []
+    loaded_from_cache = False
     if cache_path and os.path.isfile(cache_path):
         try:
             with open(cache_path, "rb") as fp:
@@ -124,18 +193,22 @@ def _load_graph(nidm_files, use_cache=True):
                 graph, namespaces = obj
                 for prefix, uri in namespaces:
                     graph.bind(prefix, uri, replace=True)
-                return graph, []
+                loaded_from_cache = True
         except Exception:
-            pass  # corrupt / incompatible cache -> reparse
+            loaded_from_cache = False  # corrupt / incompatible cache -> reparse
 
-    graph = Graph()
-    skipped = _parse_into_graph(graph, nidm_files)
-    if cache_path and not skipped:
-        try:
-            with open(cache_path, "wb") as fp:
-                pickle.dump((graph, list(graph.namespaces())), fp)
-        except Exception:
-            pass  # caching is best-effort
+    if not loaded_from_cache:
+        skipped = _parse_into_graph(graph, nidm_files)
+        if cache_path and not skipped:
+            try:
+                with open(cache_path, "wb") as fp:
+                    pickle.dump((graph, list(graph.namespaces())), fp)
+            except Exception:
+                pass  # caching is best-effort
+
+    # Materialize the normalized-subject-id index on the final graph (after the
+    # raw graph is cached), so deterministic joins are indexed term matches.
+    _materialize_normalized_ids(graph)
     return graph, skipped
 
 
@@ -367,17 +440,41 @@ def _format_de_for_display(de, index=None):
     return prefix + " | ".join(parts)
 
 
-def _ask_user_to_pick(concept_name, matches):
-    """Present multiple DE matches and let the user choose one, several, or all.
-
-    Returns a list of selected DE dicts (may contain multiple entries),
-    or None if the user wants to skip.
-    """
-    n = len(matches)
-    click.echo(
-        f"\nMultiple DataElements match '{concept_name}':",
-        err=True,
+def _de_group_key(de):
+    """Identity of a 'logical variable': DEs sharing this key are the same
+    variable (e.g. one per site) and collapse into one column.  Differing
+    namespace / unit / measure / laterality (FSL vs ANTS vs FreeSurfer) splits
+    them.  Shared by the interactive picker and the deterministic builder."""
+    qname = de.get("qname", de.get("uri", ""))
+    prefix = qname.split(":")[0] if ":" in qname else ""
+    return (
+        de.get("source_variable") or de.get("label") or "",
+        de.get("is_about") or "",
+        prefix,
+        de.get("unit") or "",
+        de.get("measure_of") or "",
+        de.get("laterality") or "",
     )
+
+
+def _group_de_matches(matches):
+    """Group *matches* by :func:`_de_group_key`, preserving first-seen order.
+    Returns a list of {"key", "members": [de, ...]} dicts."""
+    groups = []
+    index = {}
+    for de in matches:
+        key = _de_group_key(de)
+        if key not in index:
+            index[key] = len(groups)
+            groups.append({"key": key, "members": []})
+        groups[index[key]]["members"].append(de)
+    return groups
+
+
+def _pick_individual(concept_name, matches):
+    """The per-variable picker: list every DE and let the user choose."""
+    n = len(matches)
+    click.echo(f"\nMultiple DataElements match '{concept_name}':", err=True)
     for i, de in enumerate(matches):
         click.echo(_format_de_for_display(de, index=i + 1), err=True)
     click.echo("  [a] Select all", err=True)
@@ -387,7 +484,6 @@ def _ask_user_to_pick(concept_name, matches):
         "(e.g. 2,3), 'a' for all, or 0 to skip.",
         err=True,
     )
-
     while True:
         try:
             raw = input("Your choice: ").strip()
@@ -397,7 +493,6 @@ def _ask_user_to_pick(concept_name, matches):
             return None
         if raw.lower() == "a":
             return list(matches)
-        # Parse comma-separated indices
         try:
             indices = [int(x.strip()) - 1 for x in raw.split(",")]
             if all(0 <= idx < n for idx in indices):
@@ -409,6 +504,78 @@ def _ask_user_to_pick(concept_name, matches):
             f"(comma-separated), 'a' for all, or 0 to skip.",
             err=True,
         )
+
+
+def _pick_by_group(concept_name, matches, groups):
+    """Concept-level picker: one entry per logical-variable group.  A group of
+    several per-site replicas is offered as a single 'match by concept' choice;
+    'e' expands to the full per-variable list."""
+    n = len(groups)
+    click.echo(
+        f"\n'{concept_name}' matches {len(matches)} DataElements in {n} "
+        f"group(s) (same concept across files is grouped):",
+        err=True,
+    )
+    for i, grp in enumerate(groups):
+        rep = grp["members"][0]
+        count = len(grp["members"])
+        label = rep.get("label", rep.get("qname", rep.get("uri", "")))
+        isa = rep.get("is_about")
+        isa_short = isa.rsplit("/", 1)[-1] if isa else None
+        if count > 1:
+            line = f"  [{i + 1}] {label}  — {count} site variables; " "match by concept"
+            if isa_short:
+                line += f" (isAbout {isa_short})"
+        else:
+            line = f"  [{i + 1}] {label}  ({rep.get('qname', rep.get('uri', ''))})"
+            if isa_short:
+                line += f"  isAbout {isa_short}"
+        click.echo(line, err=True)
+    click.echo("  [a] Select all groups", err=True)
+    click.echo("  [e] Expand to choose individual variables", err=True)
+    click.echo("  [0] Skip this variable", err=True)
+    click.echo(
+        "\nEnter group number(s) (comma-separated), 'a' for all, "
+        "'e' to expand, or 0 to skip.",
+        err=True,
+    )
+    while True:
+        try:
+            raw = input("Your choice: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if raw == "0":
+            return None
+        if raw.lower() == "e":
+            return _pick_individual(concept_name, matches)
+        if raw.lower() == "a":
+            return [de for grp in groups for de in grp["members"]]
+        try:
+            indices = [int(x.strip()) - 1 for x in raw.split(",")]
+            if all(0 <= idx < n for idx in indices):
+                return [de for idx in indices for de in groups[idx]["members"]]
+        except ValueError:
+            pass
+        click.echo(
+            f"  Please enter group numbers between 1 and {n} "
+            f"(comma-separated), 'a' for all, 'e' to expand, or 0 to skip.",
+            err=True,
+        )
+
+
+def _ask_user_to_pick(concept_name, matches):
+    """Let the user choose among DE matches.
+
+    When the matches collapse into fewer logical-variable groups than there are
+    matches (e.g. 24 per-site SEX variables -> one concept), present a concise
+    concept-level picker (with an option to expand to individual variables);
+    otherwise list the variables directly.  Returns the selected DE dicts (the
+    flattened members of the chosen groups), or None to skip.
+    """
+    groups = _group_de_matches(matches)
+    if len(groups) < len(matches):
+        return _pick_by_group(concept_name, matches, groups)
+    return _pick_individual(concept_name, matches)
 
 
 # ---------------------------------------------------------------------------
@@ -662,8 +829,13 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
    - Values from DIFFERENT source files (e.g. demographics in one file,
      FreeSurfer/FSL volumes in another) have DIFFERENT Person nodes AND the
      `src_subject_id` may be zero-padded differently ("50772" vs "0050772").
-     Join those by the leading-zero-stripped id, NOT by the same person node:
-     `FILTER(REPLACE(STR(?id_a), "^0+", "") = REPLACE(STR(?id_b), "^0+", ""))`.
+     pynidm materializes a normalized (leading-zero-stripped) id on every
+     Person at the predicate
+     `<http://pynidm.org/queryai#normalized_subject_id>`.  Join cross-file
+     subjects on THAT (an indexed term match):
+     `?p_a <http://pynidm.org/queryai#normalized_subject_id> ?subject_id .
+      ?p_b <http://pynidm.org/queryai#normalized_subject_id> ?subject_id .`
+     Do NOT use `FILTER(REPLACE(...))` — it can't use an index and is slow.
 
 2. **Locate each value via the PROV backbone + its resolved DE URI:**
    ```
@@ -826,14 +998,7 @@ def _coalesce_selected_des(name, role, selected_list):
     for de in selected_list:
         qname = de.get("qname", de["uri"])
         prefix = qname.split(":")[0] if ":" in qname else ""
-        key = (
-            de.get("source_variable") or de.get("label") or "",
-            de.get("is_about") or "",
-            prefix,
-            de.get("unit") or "",
-            de.get("measure_of") or "",
-            de.get("laterality") or "",
-        )
+        key = _de_group_key(de)
         if key not in groups:
             groups[key] = {"uris": [], "rep": de, "prefix": prefix}
             order.append(key)
@@ -873,12 +1038,12 @@ def _build_deterministic_sparql(resolved_vars):
     An optional ``levels`` dict triggers coded->label mapping for that column.
     Returns the SPARQL string (one row per subject, ordered by subject id).
     """
-    used = {"subject_id", "sid_raw", "p"}
+    used = {"subject_id", "p"}
     select_cols = ["?subject_id"]
     blocks = []
     for i, v in enumerate(resolved_vars):
         col = _sparql_var_name(v.get("name", f"var_{i}"), used)
-        ent, per, sid = f"e_{i}", f"p_{i}", f"s_{i}"
+        ent, per = f"e_{i}", f"p_{i}"
         uris = v.get("uris") or [v["uri"]]
         is_about = v.get("is_about")
         levels = v.get("levels")
@@ -914,23 +1079,20 @@ def _build_deterministic_sparql(resolved_vars):
             "  OPTIONAL {\n"
             f"{pattern}"
             f"         prov:wasGeneratedBy/prov:qualifiedAssociation/prov:agent ?{per} .\n"
-            f"    ?{per} ndar:src_subject_id ?{sid} .\n"
-            f'    FILTER(REPLACE(STR(?{sid}), "^0+", "") = ?subject_id)\n'
+            f"    ?{per} <{_NORM_SID_URI}> ?subject_id .\n"
             f"{map_line}"
             "  }"
         )
         select_cols.append(f"?{col}")
 
     return (
-        "PREFIX prov: <http://www.w3.org/ns/prov#>\n"
-        "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n\n"
+        "PREFIX prov: <http://www.w3.org/ns/prov#>\n\n"
         f"SELECT {' '.join(select_cols)}\n"
         "WHERE {\n"
-        "  # one row per distinct (leading-zero-stripped) subject id\n"
+        "  # one row per subject (normalized, leading-zero-stripped, id)\n"
         "  {\n"
         "    SELECT DISTINCT ?subject_id WHERE {\n"
-        "      ?p ndar:src_subject_id ?sid_raw .\n"
-        '      BIND(REPLACE(STR(?sid_raw), "^0+", "") AS ?subject_id)\n'
+        f"      ?p <{_NORM_SID_URI}> ?subject_id .\n"
         "    }\n"
         "  }\n\n" + "\n".join(blocks) + "\n}\nORDER BY ?subject_id\n"
     )
@@ -998,22 +1160,20 @@ def _build_enumeration_sparql(group_by_project=False):
     """
     if not group_by_project:
         return (
-            "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n\n"
             "SELECT DISTINCT ?subject_id\n"
             "WHERE {\n"
-            "  ?person ndar:src_subject_id ?subject_id .\n"
+            f"  ?person <{_NORM_SID_URI}> ?subject_id .\n"
             "}\n"
             "ORDER BY ?subject_id\n"
         )
     return (
         "PREFIX prov: <http://www.w3.org/ns/prov#>\n"
-        "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n"
         "PREFIX nidm: <http://purl.org/nidash/nidm#>\n"
         "PREFIX dct: <http://purl.org/dc/terms/>\n"
         "PREFIX dcmitype: <http://purl.org/dc/dcmitype/>\n\n"
         "SELECT DISTINCT ?project_title ?subject_id\n"
         "WHERE {\n"
-        "  ?person ndar:src_subject_id ?subject_id .\n"
+        f"  ?person <{_NORM_SID_URI}> ?subject_id .\n"
         "  ?assoc prov:agent ?person .\n"
         "  ?activity prov:qualifiedAssociation ?assoc ;\n"
         "            dct:isPartOf+ ?project .\n"

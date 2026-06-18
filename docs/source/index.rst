@@ -801,6 +801,24 @@ routed to the LLM.  Use ``-m deterministic`` or ``-m llm`` to force a path.
    pynidm queryai -nl demographics.ttl,freesurfer_cde.ttl \
      -q "Retrieve age, sex, diagnosis, and left and right hippocampus volume" -s
 
+**Faster query engine (optional).**
+
+rdflib's built-in SPARQL engine is pure-Python and can be slow on large
+multi-file graphs (many sites + CDEs).  Installing `oxrdflib
+<https://github.com/oxigraph/oxrdflib>`_ lets ``queryai`` run the *same* queries
+through the Rust-backed **Oxigraph** engine, which is typically far faster — and
+it accelerates LLM-generated queries too, not just the deterministic ones:
+
+.. code:: bash
+
+   pip install oxrdflib
+
+It is used automatically when installed; select explicitly with
+``PYNIDM_QUERYAI_ENGINE`` (``auto`` (default) | ``oxigraph`` | ``rdflib``).
+Subject joins are matched on a normalized (leading-zero-stripped) id
+materialized at load, so cross-file joins use a term index rather than a
+per-row ``REPLACE`` filter in either engine.
+
 **Demo Script:**
 
 A demo script that automatically downloads sample NIDM data from public

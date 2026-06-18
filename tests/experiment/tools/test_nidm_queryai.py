@@ -3,8 +3,10 @@
 from __future__ import annotations
 import csv
 from pathlib import Path
+import sys
 from rdflib import Graph
 from nidm.experiment.tools.nidm_queryai import (
+    _ask_user_to_pick,
     _build_deterministic_sparql,
     _build_enumeration_sparql,
     _coalesce_selected_des,
@@ -14,7 +16,10 @@ from nidm.experiment.tools.nidm_queryai import (
     _load_graph,
     _looks_analytical,
     _looks_like_subject_enumeration,
+    _make_graph,
+    _materialize_normalized_ids,
     _mentions_project_or_site,
+    _normalize_subject_id,
     _parse_into_graph,
     _rdflib_format,
     _write_results_csv,
@@ -177,8 +182,10 @@ def test_build_deterministic_sparql_anchors_each_var_and_maps_only_from_levels()
     )
     # one anchored OPTIONAL per variable
     assert q.count("OPTIONAL {") == 3
-    # every block re-anchors to the shared subject id (driver + 3 blocks = 4)
-    assert q.count("REPLACE(STR(") == 4
+    # every block joins on the indexed normalized-id (driver + 3 blocks = 4);
+    # no non-indexable REPLACE filter
+    assert "REPLACE(" not in q
+    assert q.count("<http://pynidm.org/queryai#normalized_subject_id> ?subject_id") == 4
     assert q.count("prov:wasGeneratedBy/prov:qualifiedAssociation/prov:agent") == 3
     # value mapping ONLY where levels exist
     assert 'IF(?sex_code = "1", "Male"' in q
@@ -285,6 +292,84 @@ def test_build_deterministic_sparql_isabout_anchor_for_shared_concept() -> None:
     assert "<http://x/fsl_pallidum> ?left_pallidum_volume" in q
 
 
+def _sex_replicas(n=24):
+    return [
+        {
+            "qname": f"niiri:SEX_{i}",
+            "uri": f"http://iri.nidash.org/SEX_{i}",
+            "source_variable": "SEX",
+            "is_about": "http://uri.interlex.org/base/ilx_0101292",
+            "label": "SEX",
+        }
+        for i in range(n)
+    ]
+
+
+def _pallidum_sources():
+    # 4 genuinely distinct sources (namespace/unit) -> no consolidation
+    return [
+        {
+            "qname": "fsl:fsl_12",
+            "uri": "f",
+            "label": "L-Pall",
+            "unit": "mm^3",
+            "laterality": "Left",
+            "is_about": "P",
+        },
+        {
+            "qname": "ants:ants_27",
+            "uri": "a1",
+            "label": "L-Pall",
+            "unit": "voxel",
+            "laterality": "Left",
+            "is_about": "P",
+        },
+        {
+            "qname": "ants:ants_28",
+            "uri": "a2",
+            "label": "L-Pall",
+            "unit": "mm^3",
+            "laterality": "Left",
+            "is_about": "P",
+        },
+        {
+            "qname": "fs:fs_3315",
+            "uri": "s",
+            "label": "L-Pall",
+            "unit": "mm^3",
+            "laterality": "Left",
+            "is_about": "P",
+        },
+    ]
+
+
+def test_picker_consolidates_replicas_into_one_concept_choice(monkeypatch) -> None:
+    """24 per-site SEX variables are offered as ONE concept group; choosing it
+    returns all 24 members (which the builder then coalesces to one column)."""
+    matches = _sex_replicas(24)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "1")
+    chosen = _ask_user_to_pick("sex", matches)
+    assert len(chosen) == 24  # the whole group, picked with a single choice
+
+
+def test_picker_expand_lists_individual_variables(monkeypatch) -> None:
+    """'e' expands the concept picker to the per-variable list."""
+    matches = _sex_replicas(24)
+    answers = iter(["e", "3"])  # expand, then pick the 3rd individual variable
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: next(answers))
+    chosen = _ask_user_to_pick("sex", matches)
+    assert chosen == [matches[2]]
+
+
+def test_picker_lists_individuals_when_no_consolidation(monkeypatch) -> None:
+    """Distinct sources (FSL/ANTS/FS) don't consolidate -> per-variable picker;
+    choosing 1 returns exactly that one DataElement."""
+    matches = _pallidum_sources()
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "1")
+    chosen = _ask_user_to_pick("left pallidum volume", matches)
+    assert chosen == [matches[0]]
+
+
 def test_deterministic_query_joins_across_zero_padding_without_cartesian(
     tmp_path: Path,
 ) -> None:
@@ -327,6 +412,7 @@ def test_deterministic_query_joins_across_zero_padding_without_cartesian(
     g = Graph()
     g.parse(tmp_path / "demo.ttl", format="turtle")
     g.parse(tmp_path / "deriv.ttl", format="turtle")
+    _materialize_normalized_ids(g)  # builder joins on the normalized-id index
 
     query = _build_deterministic_sparql(
         [
@@ -475,6 +561,59 @@ def test_ensure_prefixes_falls_back_to_well_known() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_make_graph_defaults_to_rdflib_without_oxrdflib(monkeypatch) -> None:
+    """With oxrdflib unavailable and no override, the default rdflib store is
+    used (engine selection never hard-fails)."""
+    monkeypatch.setitem(sys.modules, "oxrdflib", None)  # force ImportError
+    monkeypatch.delenv("PYNIDM_QUERYAI_ENGINE", raising=False)
+    _graph, engine = _make_graph()
+    assert engine == "rdflib"
+
+
+def test_make_graph_respects_forced_rdflib(monkeypatch) -> None:
+    monkeypatch.setenv("PYNIDM_QUERYAI_ENGINE", "rdflib")
+    _graph, engine = _make_graph()
+    assert engine == "rdflib"
+
+
+def test_make_graph_forced_oxigraph_missing_falls_back(monkeypatch) -> None:
+    """Explicitly requesting Oxigraph when oxrdflib isn't installed warns and
+    falls back to rdflib rather than crashing."""
+    monkeypatch.setitem(sys.modules, "oxrdflib", None)
+    monkeypatch.setenv("PYNIDM_QUERYAI_ENGINE", "oxigraph")
+    _graph, engine = _make_graph()
+    assert engine == "rdflib"
+
+
+def test_normalize_subject_id_strips_leading_zeros() -> None:
+    assert _normalize_subject_id("0050772") == "50772"
+    assert _normalize_subject_id("50773") == "50773"
+    assert _normalize_subject_id("0") == "0"  # keep at least one char
+    assert _normalize_subject_id("000") == "0"
+
+
+def test_materialize_normalized_ids_indexes_each_person(tmp_path: Path) -> None:
+    """Every ndar:src_subject_id gets a normalized-id triple so cross-file
+    joins are an indexed term match (not a REPLACE filter)."""
+    from rdflib import URIRef
+
+    ttl = (
+        "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+        "@prefix niiri: <http://iri.nidash.org/> .\n"
+        'niiri:p1 ndar:src_subject_id "0050772" .\n'
+        'niiri:p2 ndar:src_subject_id "50773" .\n'
+    )
+    f = tmp_path / "ids.ttl"
+    f.write_text(ttl, encoding="utf-8")
+    g = Graph()
+    g.parse(f, format="turtle")
+    _materialize_normalized_ids(g)
+
+    norm = URIRef("http://pynidm.org/queryai#normalized_subject_id")
+    values = {str(o) for _s, _p, o in g.triples((None, norm, None))}
+    assert values == {"50772", "50773"}  # 0050772 and 50773 both normalize
+
+
 def test_subject_enumeration_intent_detection() -> None:
     enum = "List all subjects by ABIDE project name where you can find the site"
     assert _looks_like_subject_enumeration(enum) is True
@@ -509,6 +648,7 @@ def test_enumeration_query_groups_distinct_subjects_no_dup(tmp_path: Path) -> No
     f.write_text(ttl, encoding="utf-8")
     g = Graph()
     g.parse(f, format="turtle")
+    _materialize_normalized_ids(g)  # enumeration joins on the normalized-id index
 
     rows = list(g.query(_build_enumeration_sparql(group_by_project=True)))
     assert len(rows) == 1, [tuple(map(str, r)) for r in rows]
