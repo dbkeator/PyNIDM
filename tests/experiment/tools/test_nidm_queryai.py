@@ -187,6 +187,8 @@ def test_build_deterministic_sparql_anchors_each_var_and_maps_only_from_levels()
     assert "REPLACE(" not in q
     assert q.count("<http://pynidm.org/queryai#normalized_subject_id> ?subject_id") == 4
     assert q.count("prov:wasGeneratedBy/prov:qualifiedAssociation/prov:agent") == 3
+    # outer SELECT + driver subquery are both DISTINCT (dedup multi-path rows)
+    assert q.count("SELECT DISTINCT") == 2
     # value mapping ONLY where levels exist
     assert 'IF(?sex_code = "1", "Male"' in q
     assert "?age_code" not in q and "?left_hippocampus_volume_code" not in q
@@ -526,6 +528,37 @@ def test_load_graph_caches_clean_load_and_skips_cache_on_error(
     g3, skipped3 = _load_graph([str(good), str(bad)])
     assert [s for s, _e in skipped3] == [str(bad)]
     assert len(g3) >= n
+
+
+def test_deterministic_query_distinct_collapses_multipath_duplicates(
+    tmp_path: Path,
+) -> None:
+    """A subject reachable by more than one provenance path (here an activity
+    with the subject agent in two qualifiedAssociation entries) must yield ONE
+    row, not one per path."""
+    ttl = (
+        "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+        "@prefix ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/> .\n"
+        "@prefix niiri: <http://iri.nidash.org/> .\n"
+        "@prefix x: <http://x/> .\n"
+        'niiri:person a prov:Person ; ndar:src_subject_id "0050001" .\n'
+        # same subject agent appears in TWO associations on the activity
+        "niiri:act a prov:Activity ; "
+        "prov:qualifiedAssociation [ prov:agent niiri:person ] , "
+        "[ prov:agent niiri:person ] .\n"
+        'niiri:e a prov:Entity ; x:AGE "11" ; prov:wasGeneratedBy niiri:act .\n'
+    )
+    f = tmp_path / "multipath.ttl"
+    f.write_text(ttl, encoding="utf-8")
+    g = Graph()
+    g.parse(f, format="turtle")
+    _materialize_normalized_ids(g)
+
+    query = _build_deterministic_sparql([{"name": "age", "uri": "http://x/AGE"}])
+    rows = list(g.query(query))
+    assert len(rows) == 1, [tuple(map(str, r)) for r in rows]
+    assert str(rows[0]["subject_id"]) == "50001"
+    assert str(rows[0]["age"]) == "11"
 
 
 def test_load_graph_cache_preserves_namespace_bindings(tmp_path: Path) -> None:

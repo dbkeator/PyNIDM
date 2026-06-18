@@ -1087,7 +1087,10 @@ def _build_deterministic_sparql(resolved_vars):
 
     return (
         "PREFIX prov: <http://www.w3.org/ns/prov#>\n\n"
-        f"SELECT {' '.join(select_cols)}\n"
+        # DISTINCT: a subject reachable by more than one provenance path (e.g.
+        # an activity carrying the subject agent in several qualifiedAssociation
+        # entries) would otherwise repeat the identical row once per path.
+        f"SELECT DISTINCT {' '.join(select_cols)}\n"
         "WHERE {\n"
         "  # one row per subject (normalized, leading-zero-stripped, id)\n"
         "  {\n"
