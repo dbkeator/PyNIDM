@@ -702,7 +702,7 @@ size (use a generous value — the Phase 2 prompt includes the NIDM schema):
 
    brew install llama.cpp                                          # macOS; see llama.cpp for other platforms
 
-   llama-server -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M -c 16384 -ngl 99
+   llama-server -hf bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_M -c 16384 -ngl 99
 
 This serves an OpenAI-compatible API on ``http://localhost:8080``.  Then point
 ``queryai`` at it and run as usual:
@@ -720,9 +720,10 @@ set ``PYNIDM_LLAMA_URL=http://localhost:11434/v1`` and
 ``PYNIDM_LLAMA_MODEL=llama3`` (the model tag).
 
 With a local server **nothing leaves your machine** — not the question, the
-schema, or your data.  Model choice matters: a 7B model handles simple queries,
-but complex multi-variable queries are far more reliable with a 14B+ instruct
-model (e.g. ``Qwen2.5-14B-Instruct-GGUF:Q4_K_M``) if you have the memory.  Local
+schema, or your data.  Model choice matters: a small 7B model only handles the
+simplest queries, so we recommend a **14B instruct model**
+(``Qwen2.5-14B-Instruct-GGUF:Q4_K_M``, shown above) for the multi-variable
+queries typical of real use — larger still if you have the memory.  Local
 models are generally less reliable than Claude/GPT at producing valid SPARQL, so
 always inspect the generated query with ``-s``.
 
@@ -801,23 +802,24 @@ routed to the LLM.  Use ``-m deterministic`` or ``-m llm`` to force a path.
    pynidm queryai -nl demographics.ttl,freesurfer_cde.ttl \
      -q "Retrieve age, sex, diagnosis, and left and right hippocampus volume" -s
 
-**Faster query engine (optional).**
+**Query engine (Oxigraph).**
 
-rdflib's built-in SPARQL engine is pure-Python and can be slow on large
-multi-file graphs (many sites + CDEs).  Installing `oxrdflib
-<https://github.com/oxigraph/oxrdflib>`_ lets ``queryai`` run the *same* queries
-through the Rust-backed **Oxigraph** engine, which is typically far faster — and
-it accelerates LLM-generated queries too, not just the deterministic ones:
+rdflib's built-in SPARQL engine is pure-Python and can be very slow on large
+multi-file graphs (many sites + CDEs).  PyNIDM therefore depends on `oxrdflib
+<https://github.com/oxigraph/oxrdflib>`_ (the Rust-backed **Oxigraph** engine),
+installed automatically with the package, and runs SPARQL through it by default.
+This speeds up **both** ``pynidm query`` and ``pynidm queryai`` (including
+LLM-generated queries, not just the deterministic ones).  Subject joins are
+matched on a normalized (leading-zero-stripped) id materialized at load, so
+cross-file joins use a term index rather than a per-row ``REPLACE`` filter.
+
+No setup is needed.  To force the engine for a single run, set
+``PYNIDM_QUERY_ENGINE`` (``auto`` (default) | ``oxigraph`` | ``rdflib``); use
+``rdflib`` only to fall back to the built-in engine:
 
 .. code:: bash
 
-   pip install oxrdflib
-
-It is used automatically when installed; select explicitly with
-``PYNIDM_QUERYAI_ENGINE`` (``auto`` (default) | ``oxigraph`` | ``rdflib``).
-Subject joins are matched on a normalized (leading-zero-stripped) id
-materialized at load, so cross-file joins use a term index rather than a
-per-row ``REPLACE`` filter in either engine.
+   PYNIDM_QUERY_ENGINE=rdflib pynidm query -nl data/nidm.ttl -q query.rq
 
 **Demo Script:**
 

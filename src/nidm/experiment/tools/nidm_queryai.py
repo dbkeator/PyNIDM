@@ -8,20 +8,15 @@ This tool uses a two-phase approach:
   Phase 2: AI generates a SPARQL query using the resolved, exact URIs.
 """
 
-import csv
-import hashlib
 import json
 import os
 from pathlib import Path
-import pickle
 import re
 import sys
-import tempfile
 import click
-from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib import Graph, Literal, Namespace
 import requests
 from nidm.experiment.tools.click_base import cli
-from nidm.experiment.tools.nidm_file_utils import expand_nidm_file_list
 
 # ---------------------------------------------------------------------------
 # Namespace constants
@@ -46,173 +41,6 @@ REPROSCHEMA = Namespace("http://schema.repronim.org/")
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "nidm_schema.json"
 
 # ---------------------------------------------------------------------------
-# Graph loading (tolerant parse + on-disk cache)
-# ---------------------------------------------------------------------------
-
-
-def _rdflib_format(source):
-    """Pick an rdflib parser format from a file path / URL suffix."""
-    s = source.lower().split("?")[0].split("#")[0]
-    if s.endswith((".jsonld", ".json")):
-        return "json-ld"
-    if s.endswith(".nt"):
-        return "nt"
-    if s.endswith((".rdf", ".owl", ".xml")):
-        return "xml"
-    if s.endswith(".n3"):
-        return "n3"
-    return "turtle"
-
-
-def _parse_into_graph(graph, nidm_files):
-    """Parse each source into *graph*, skipping (and collecting) any that fail.
-
-    A single malformed file therefore can't abort the whole query.  Returns a
-    list of ``(source, error)`` for the files that were skipped.
-    """
-    skipped = []
-    for f in nidm_files:
-        try:
-            graph.parse(f, format=_rdflib_format(f))
-        except Exception as e:  # malformed RDF, missing file, network error, ...
-            skipped.append((f, e))
-    return skipped
-
-
-# Internal predicate: a per-person, leading-zero-stripped copy of
-# ndar:src_subject_id materialized at load time.  Cross-file subject joins then
-# become an INDEXED term match (`?p <norm> ?subject_id`) instead of a
-# non-indexable `FILTER(REPLACE(STR(?id), "^0+", "") = ?subject_id)` -- the
-# difference between a hash/index join and a per-row nested-loop scan, which is
-# what made the multi-file deterministic query crawl (and is unindexable in any
-# engine, Oxigraph included).
-_NORM_SID_URI = "http://pynidm.org/queryai#normalized_subject_id"
-_NDAR_SID_URI = "https://ndar.nih.gov/api/datadictionary/v2/dataelement/src_subject_id"
-
-
-def _normalize_subject_id(raw):
-    """Strip leading zeros (keeping at least one character) so '0050772' and
-    '50772' collapse to the same key across files."""
-    return re.sub(r"^0+(?=.)", "", str(raw))
-
-
-def _materialize_normalized_ids(graph):
-    """Add ``(person, _NORM_SID_URI, normalized id)`` for every
-    ``ndar:src_subject_id`` in *graph*.  Idempotent, so it is safe on a freshly
-    parsed or a cache-loaded graph.  Returns *graph*."""
-    norm = URIRef(_NORM_SID_URI)
-    sid = URIRef(_NDAR_SID_URI)
-    for person, raw in list(graph.subject_objects(sid)):
-        graph.add((person, norm, Literal(_normalize_subject_id(raw))))
-    return graph
-
-
-def _graph_cache_path(nidm_files):
-    """Tempdir pickle path keyed on the file set + each file's mtime/size, so
-    the cache auto-invalidates whenever any input file changes."""
-    hasher = hashlib.md5()
-    for f in sorted(nidm_files):
-        hasher.update(f.encode("utf-8"))
-        try:
-            st = os.stat(f)
-            hasher.update(str((st.st_mtime_ns, st.st_size)).encode("utf-8"))
-        except OSError:
-            hasher.update(b"\x00")
-    # The "v2" tag invalidates older cache files that stored the graph alone
-    # (without its namespace bindings, which pickling an rdflib Graph drops).
-    return os.path.join(
-        tempfile.gettempdir(), f"pynidm_queryai_graph_v2.{hasher.hexdigest()}.pickle"
-    )
-
-
-def _make_graph():
-    """Create the backing graph, preferring the Oxigraph (Rust) SPARQL engine
-    when available.
-
-    rdflib's built-in SPARQL engine is pure-Python with no query optimizer, so
-    multi-OPTIONAL / property-path queries over a large merged graph are slow.
-    If the optional ``oxrdflib`` package is installed, the same rdflib API runs
-    queries through Oxigraph's optimized engine instead.  Selected by
-    ``PYNIDM_QUERYAI_ENGINE`` (``auto`` (default) | ``oxigraph`` | ``rdflib``).
-    Returns ``(graph, engine_name)``.
-    """
-    requested = os.environ.get("PYNIDM_QUERYAI_ENGINE", "auto").strip().lower()
-    if requested in ("auto", "oxigraph"):
-        try:
-            import oxrdflib  # noqa: F401
-
-            return Graph(store="Oxigraph"), "oxigraph"
-        except Exception:
-            if requested == "oxigraph":
-                click.echo(
-                    "Warning: PYNIDM_QUERYAI_ENGINE=oxigraph but the 'oxrdflib' "
-                    "package isn't installed; using rdflib.  "
-                    "Install with: pip install oxrdflib",
-                    err=True,
-                )
-    return Graph(), "rdflib"
-
-
-def _load_graph(nidm_files, use_cache=True):
-    """Parse *nidm_files* into one graph, with a tempdir pickle cache so repeat
-    queries over the same (unchanged) files skip parsing entirely.
-
-    Returns ``(graph, skipped)`` where *skipped* is the ``(source, error)``
-    list from :func:`_parse_into_graph`.  The cache is only written on a clean
-    load (nothing skipped) and is bypassed when any source is an ``http(s)``
-    URL (whose contents can't be cheaply checked for staleness).
-
-    The namespace bindings are cached *separately* and re-applied on load,
-    because pickling an rdflib ``Graph`` does NOT preserve them -- without this
-    a cache hit would yield a graph that can't resolve prefixes like ``dct:``
-    at query time.
-    """
-    graph, engine = _make_graph()
-    if engine == "oxigraph":
-        click.echo("queryai: using the Oxigraph SPARQL engine.", err=True)
-
-    has_url = any(
-        f.startswith("http://") or f.startswith("https://") for f in nidm_files
-    )
-    # The pickle cache only applies to the default in-memory rdflib store; the
-    # Oxigraph store can't be pickled, and its Rust parser is fast enough to
-    # re-read each run.
-    cache_path = (
-        None
-        if has_url or not use_cache or engine != "rdflib"
-        else _graph_cache_path(nidm_files)
-    )
-
-    skipped = []
-    loaded_from_cache = False
-    if cache_path and os.path.isfile(cache_path):
-        try:
-            with open(cache_path, "rb") as fp:
-                obj = pickle.load(fp)
-            if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], Graph):
-                graph, namespaces = obj
-                for prefix, uri in namespaces:
-                    graph.bind(prefix, uri, replace=True)
-                loaded_from_cache = True
-        except Exception:
-            loaded_from_cache = False  # corrupt / incompatible cache -> reparse
-
-    if not loaded_from_cache:
-        skipped = _parse_into_graph(graph, nidm_files)
-        if cache_path and not skipped:
-            try:
-                with open(cache_path, "wb") as fp:
-                    pickle.dump((graph, list(graph.namespaces())), fp)
-            except Exception:
-                pass  # caching is best-effort
-
-    # Materialize the normalized-subject-id index on the final graph (after the
-    # raw graph is cached), so deterministic joins are indexed term matches.
-    _materialize_normalized_ids(graph)
-    return graph, skipped
-
-
-# ---------------------------------------------------------------------------
 # DataElement extraction
 # ---------------------------------------------------------------------------
 
@@ -224,9 +52,9 @@ def _extract_data_elements(nidm_files):
     is_about, source_variable, value_type, measure_of, laterality, unit,
     datum_type.
     """
-    g, skipped = _load_graph(nidm_files)
-    for f, err in skipped:
-        click.echo(f"Warning: skipping unparsable NIDM file {f}: {err}", err=True)
+    g = Graph()
+    for f in nidm_files:
+        g.parse(f, format="turtle")
 
     # Collect all DataElement URIs
     de_uris = set()
@@ -440,41 +268,17 @@ def _format_de_for_display(de, index=None):
     return prefix + " | ".join(parts)
 
 
-def _de_group_key(de):
-    """Identity of a 'logical variable': DEs sharing this key are the same
-    variable (e.g. one per site) and collapse into one column.  Differing
-    namespace / unit / measure / laterality (FSL vs ANTS vs FreeSurfer) splits
-    them.  Shared by the interactive picker and the deterministic builder."""
-    qname = de.get("qname", de.get("uri", ""))
-    prefix = qname.split(":")[0] if ":" in qname else ""
-    return (
-        de.get("source_variable") or de.get("label") or "",
-        de.get("is_about") or "",
-        prefix,
-        de.get("unit") or "",
-        de.get("measure_of") or "",
-        de.get("laterality") or "",
-    )
+def _ask_user_to_pick(concept_name, matches):
+    """Present multiple DE matches and let the user choose one, several, or all.
 
-
-def _group_de_matches(matches):
-    """Group *matches* by :func:`_de_group_key`, preserving first-seen order.
-    Returns a list of {"key", "members": [de, ...]} dicts."""
-    groups = []
-    index = {}
-    for de in matches:
-        key = _de_group_key(de)
-        if key not in index:
-            index[key] = len(groups)
-            groups.append({"key": key, "members": []})
-        groups[index[key]]["members"].append(de)
-    return groups
-
-
-def _pick_individual(concept_name, matches):
-    """The per-variable picker: list every DE and let the user choose."""
+    Returns a list of selected DE dicts (may contain multiple entries),
+    or None if the user wants to skip.
+    """
     n = len(matches)
-    click.echo(f"\nMultiple DataElements match '{concept_name}':", err=True)
+    click.echo(
+        f"\nMultiple DataElements match '{concept_name}':",
+        err=True,
+    )
     for i, de in enumerate(matches):
         click.echo(_format_de_for_display(de, index=i + 1), err=True)
     click.echo("  [a] Select all", err=True)
@@ -484,6 +288,7 @@ def _pick_individual(concept_name, matches):
         "(e.g. 2,3), 'a' for all, or 0 to skip.",
         err=True,
     )
+
     while True:
         try:
             raw = input("Your choice: ").strip()
@@ -493,6 +298,7 @@ def _pick_individual(concept_name, matches):
             return None
         if raw.lower() == "a":
             return list(matches)
+        # Parse comma-separated indices
         try:
             indices = [int(x.strip()) - 1 for x in raw.split(",")]
             if all(0 <= idx < n for idx in indices):
@@ -504,78 +310,6 @@ def _pick_individual(concept_name, matches):
             f"(comma-separated), 'a' for all, or 0 to skip.",
             err=True,
         )
-
-
-def _pick_by_group(concept_name, matches, groups):
-    """Concept-level picker: one entry per logical-variable group.  A group of
-    several per-site replicas is offered as a single 'match by concept' choice;
-    'e' expands to the full per-variable list."""
-    n = len(groups)
-    click.echo(
-        f"\n'{concept_name}' matches {len(matches)} DataElements in {n} "
-        f"group(s) (same concept across files is grouped):",
-        err=True,
-    )
-    for i, grp in enumerate(groups):
-        rep = grp["members"][0]
-        count = len(grp["members"])
-        label = rep.get("label", rep.get("qname", rep.get("uri", "")))
-        isa = rep.get("is_about")
-        isa_short = isa.rsplit("/", 1)[-1] if isa else None
-        if count > 1:
-            line = f"  [{i + 1}] {label}  — {count} site variables; " "match by concept"
-            if isa_short:
-                line += f" (isAbout {isa_short})"
-        else:
-            line = f"  [{i + 1}] {label}  ({rep.get('qname', rep.get('uri', ''))})"
-            if isa_short:
-                line += f"  isAbout {isa_short}"
-        click.echo(line, err=True)
-    click.echo("  [a] Select all groups", err=True)
-    click.echo("  [e] Expand to choose individual variables", err=True)
-    click.echo("  [0] Skip this variable", err=True)
-    click.echo(
-        "\nEnter group number(s) (comma-separated), 'a' for all, "
-        "'e' to expand, or 0 to skip.",
-        err=True,
-    )
-    while True:
-        try:
-            raw = input("Your choice: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            return None
-        if raw == "0":
-            return None
-        if raw.lower() == "e":
-            return _pick_individual(concept_name, matches)
-        if raw.lower() == "a":
-            return [de for grp in groups for de in grp["members"]]
-        try:
-            indices = [int(x.strip()) - 1 for x in raw.split(",")]
-            if all(0 <= idx < n for idx in indices):
-                return [de for idx in indices for de in groups[idx]["members"]]
-        except ValueError:
-            pass
-        click.echo(
-            f"  Please enter group numbers between 1 and {n} "
-            f"(comma-separated), 'a' for all, 'e' to expand, or 0 to skip.",
-            err=True,
-        )
-
-
-def _ask_user_to_pick(concept_name, matches):
-    """Let the user choose among DE matches.
-
-    When the matches collapse into fewer logical-variable groups than there are
-    matches (e.g. 24 per-site SEX variables -> one concept), present a concise
-    concept-level picker (with an option to expand to individual variables);
-    otherwise list the variables directly.  Returns the selected DE dicts (the
-    flattened members of the chosen groups), or None to skip.
-    """
-    groups = _group_de_matches(matches)
-    if len(groups) < len(matches):
-        return _pick_by_group(concept_name, matches, groups)
-    return _pick_individual(concept_name, matches)
 
 
 # ---------------------------------------------------------------------------
@@ -829,13 +563,8 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
    - Values from DIFFERENT source files (e.g. demographics in one file,
      FreeSurfer/FSL volumes in another) have DIFFERENT Person nodes AND the
      `src_subject_id` may be zero-padded differently ("50772" vs "0050772").
-     pynidm materializes a normalized (leading-zero-stripped) id on every
-     Person at the predicate
-     `<http://pynidm.org/queryai#normalized_subject_id>`.  Join cross-file
-     subjects on THAT (an indexed term match):
-     `?p_a <http://pynidm.org/queryai#normalized_subject_id> ?subject_id .
-      ?p_b <http://pynidm.org/queryai#normalized_subject_id> ?subject_id .`
-     Do NOT use `FILTER(REPLACE(...))` — it can't use an index and is slow.
+     Join those by the leading-zero-stripped id, NOT by the same person node:
+     `FILTER(REPLACE(STR(?id_a), "^0+", "") = REPLACE(STR(?id_b), "^0+", ""))`.
 
 2. **Locate each value via the PROV backbone + its resolved DE URI:**
    ```
@@ -896,13 +625,6 @@ You MUST use the exact URIs listed below — do NOT substitute or invent URIs.
      (e.g. `?sex_code`) and BIND the derived value into a NEW variable
      (e.g. `?sex`).
    - Use only SPARQL 1.1 built-ins (IF, COALESCE, BIND, FILTER, COUNT, etc.).
-
-10. **Use `SELECT DISTINCT` for enumerations.**  A subject is linked to MANY
-    activities (each scan/assessment is its own acquisition), so joining a
-    subject to a project/session/acquisition without `DISTINCT` repeats the
-    subject once per activity.  When listing subjects (optionally by site /
-    project) select only the columns asked for and use `SELECT DISTINCT`, so
-    each subject appears once.
 
 ## Available Prefixes
 ```sparql
@@ -981,71 +703,19 @@ def _value_map_if_chain(code_var, levels):
     return expr
 
 
-def _coalesce_selected_des(name, role, selected_list):
-    """Turn the DataElements chosen for one concept into resolved-variable
-    entries, collapsing per-file replicas of the SAME logical variable.
-
-    In multi-file datasets the same concept (e.g. age) is frequently a DIFFERENT
-    URI in each NIDM record.  DEs that share (sourceVariable|label, isAbout,
-    namespace prefix, unit, measureOf, laterality) are treated as one variable
-    whose ``uris`` lists every replica (matched later by predicate-alternation
-    into a single column).  DEs that differ on those fields -- e.g. FSL vs ANTS
-    vs FreeSurfer hippocampus -- remain separate columns, suffixed by namespace.
-    Returns a list of resolved-variable dicts.
-    """
-    groups = {}
-    order = []
-    for de in selected_list:
-        qname = de.get("qname", de["uri"])
-        prefix = qname.split(":")[0] if ":" in qname else ""
-        key = _de_group_key(de)
-        if key not in groups:
-            groups[key] = {"uris": [], "rep": de, "prefix": prefix}
-            order.append(key)
-        groups[key]["uris"].append(de["uri"])
-        # prefer a representative DE that actually defines value levels
-        if de.get("levels") and not groups[key]["rep"].get("levels"):
-            groups[key]["rep"] = de
-
-    multi = len(order) > 1
-    out = []
-    for key in order:
-        grp = groups[key]
-        rep = grp["rep"]
-        out.append(
-            {
-                "name": f"{name} ({grp['prefix']})" if multi else name,
-                "role": role,
-                "qname": rep.get("qname", rep["uri"]),
-                "uri": rep["uri"],
-                "uris": grp["uris"],
-                "is_about": rep.get("is_about"),
-                "label": rep.get("label"),
-                "laterality": rep.get("laterality"),
-                "unit": rep.get("unit"),
-                "levels": rep.get("levels"),
-            }
-        )
-    return out
-
-
 def _build_deterministic_sparql(resolved_vars):
     """Build a person-anchored, zero-pad-tolerant SELECT from resolved DE URIs.
 
-    *resolved_vars* is a list of dicts each with at least ``name`` and either a
-    single ``uri`` or a ``uris`` list (the same logical variable replicated as a
-    different URI per file -> matched by predicate-alternation into one column).
-    An optional ``levels`` dict triggers coded->label mapping for that column.
+    *resolved_vars* is a list of dicts each with at least ``uri`` and ``name``;
+    an optional ``levels`` dict triggers coded->label mapping for that column.
     Returns the SPARQL string (one row per subject, ordered by subject id).
     """
-    used = {"subject_id", "p"}
+    used = {"subject_id", "sid_raw", "p"}
     select_cols = ["?subject_id"]
     blocks = []
     for i, v in enumerate(resolved_vars):
         col = _sparql_var_name(v.get("name", f"var_{i}"), used)
-        ent, per = f"e_{i}", f"p_{i}"
-        uris = v.get("uris") or [v["uri"]]
-        is_about = v.get("is_about")
+        ent, per, sid = f"e_{i}", f"p_{i}", f"s_{i}"
         levels = v.get("levels")
         if levels:
             code_var = f"?{col}_code"
@@ -1054,48 +724,27 @@ def _build_deterministic_sparql(resolved_vars):
         else:
             obj = f"?{col}"
             map_line = ""
-
-        if len(uris) > 1 and is_about:
-            # Several per-file replicas of ONE variable that share an isAbout
-            # concept: match any DataElement about that concept (covers all
-            # sites + future files) instead of listing every per-file URI.
-            de_var = f"?de_{i}"
-            pattern = (
-                f"    {de_var} <http://purl.org/nidash/nidm#isAbout> "
-                f"<{is_about}> .\n"
-                f"    ?{ent} {de_var} {obj} ;\n"
-            )
-        else:
-            # A single, specific DataElement (the user's exact pick), or
-            # replicas without a shared concept: match the URI(s) directly.
-            predicate = (
-                f"<{uris[0]}>"
-                if len(uris) == 1
-                else "(" + "|".join(f"<{u}>" for u in uris) + ")"
-            )
-            pattern = f"    ?{ent} {predicate} {obj} ;\n"
-
         blocks.append(
             "  OPTIONAL {\n"
-            f"{pattern}"
+            f"    ?{ent} <{v['uri']}> {obj} ;\n"
             f"         prov:wasGeneratedBy/prov:qualifiedAssociation/prov:agent ?{per} .\n"
-            f"    ?{per} <{_NORM_SID_URI}> ?subject_id .\n"
+            f"    ?{per} ndar:src_subject_id ?{sid} .\n"
+            f'    FILTER(REPLACE(STR(?{sid}), "^0+", "") = ?subject_id)\n'
             f"{map_line}"
             "  }"
         )
         select_cols.append(f"?{col}")
 
     return (
-        "PREFIX prov: <http://www.w3.org/ns/prov#>\n\n"
-        # DISTINCT: a subject reachable by more than one provenance path (e.g.
-        # an activity carrying the subject agent in several qualifiedAssociation
-        # entries) would otherwise repeat the identical row once per path.
-        f"SELECT DISTINCT {' '.join(select_cols)}\n"
+        "PREFIX prov: <http://www.w3.org/ns/prov#>\n"
+        "PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>\n\n"
+        f"SELECT {' '.join(select_cols)}\n"
         "WHERE {\n"
-        "  # one row per subject (normalized, leading-zero-stripped, id)\n"
+        "  # one row per distinct (leading-zero-stripped) subject id\n"
         "  {\n"
         "    SELECT DISTINCT ?subject_id WHERE {\n"
-        f"      ?p <{_NORM_SID_URI}> ?subject_id .\n"
+        "      ?p ndar:src_subject_id ?sid_raw .\n"
+        '      BIND(REPLACE(STR(?sid_raw), "^0+", "") AS ?subject_id)\n'
         "    }\n"
         "  }\n\n" + "\n".join(blocks) + "\n}\nORDER BY ?subject_id\n"
     )
@@ -1126,65 +775,6 @@ def _looks_analytical(question):
     is handled by the deterministic builder.
     """
     return bool(_ANALYTIC_RE.search(question or ""))
-
-
-# Subject-enumeration intent: "list/show/all ... subjects/participants",
-# optionally grouped by the study/site/project.  Handled by a deterministic,
-# DISTINCT, person-anchored query (no LLM) -- this is the dominant "who is in
-# this dataset" question and the LLM tends to emit a DISTINCT-less join that
-# repeats each subject once per acquisition.
-_ENUMERATION_VERB_RE = re.compile(
-    r"(?i)\b(list|show|display|enumerate|give|get|retrieve|find|all|every|"
-    r"which|what|who)\b"
-)
-_SUBJECT_RE = re.compile(r"(?i)\b(subject|participant)s?\b")
-_PROJECT_SITE_RE = re.compile(r"(?i)\b(project|site|study|dataset|cohort)\b")
-
-
-def _looks_like_subject_enumeration(question):
-    """True for a plain "list the subjects [by site/project]" question."""
-    q = question or ""
-    return bool(_SUBJECT_RE.search(q) and _ENUMERATION_VERB_RE.search(q))
-
-
-def _mentions_project_or_site(question):
-    """True if the question asks to group/label subjects by study/site/project."""
-    return bool(_PROJECT_SITE_RE.search(question or ""))
-
-
-def _build_enumeration_sparql(group_by_project=False):
-    """Deterministic subject enumeration.
-
-    Without grouping: one row per distinct subject id.  With grouping: one row
-    per (project title, subject id), joining the subject to its
-    ``nidm:Project`` through the PROV/``dct:isPartOf`` backbone.  ``DISTINCT``
-    collapses the per-acquisition multiplicity that makes the LLM query repeat
-    each subject.
-    """
-    if not group_by_project:
-        return (
-            "SELECT DISTINCT ?subject_id\n"
-            "WHERE {\n"
-            f"  ?person <{_NORM_SID_URI}> ?subject_id .\n"
-            "}\n"
-            "ORDER BY ?subject_id\n"
-        )
-    return (
-        "PREFIX prov: <http://www.w3.org/ns/prov#>\n"
-        "PREFIX nidm: <http://purl.org/nidash/nidm#>\n"
-        "PREFIX dct: <http://purl.org/dc/terms/>\n"
-        "PREFIX dcmitype: <http://purl.org/dc/dcmitype/>\n\n"
-        "SELECT DISTINCT ?project_title ?subject_id\n"
-        "WHERE {\n"
-        f"  ?person <{_NORM_SID_URI}> ?subject_id .\n"
-        "  ?assoc prov:agent ?person .\n"
-        "  ?activity prov:qualifiedAssociation ?assoc ;\n"
-        "            dct:isPartOf+ ?project .\n"
-        "  ?project a nidm:Project ;\n"
-        "           dcmitype:title ?project_title .\n"
-        "}\n"
-        "ORDER BY ?project_title ?subject_id\n"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1407,27 +997,6 @@ def _extract_sparql(ai_response):
     return None
 
 
-# Well-known prefixes the LLM commonly emits.  Used as a fallback so a query
-# using e.g. ``dct:`` still resolves even if no loaded file (or a namespace-
-# stripped cache) bound it.  The graph's own bindings take precedence.
-_WELL_KNOWN_PREFIXES = {
-    "dct": "http://purl.org/dc/terms/",
-    "dcterms": "http://purl.org/dc/terms/",
-    "dctypes": "http://purl.org/dc/dcmitype/",
-    "dcmitype": "http://purl.org/dc/dcmitype/",
-    "prov": "http://www.w3.org/ns/prov#",
-    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    "xsd": "http://www.w3.org/2001/XMLSchema#",
-    "owl": "http://www.w3.org/2002/07/owl#",
-    "skos": "http://www.w3.org/2004/02/skos/core#",
-    "foaf": "http://xmlns.com/foaf/0.1/",
-    "nidm": "http://purl.org/nidash/nidm#",
-    "niiri": "http://iri.nidash.org/",
-    "ndar": "https://ndar.nih.gov/api/datadictionary/v2/dataelement/",
-}
-
-
 def _ensure_prefixes(sparql_query, prefixes):
     """Prepend ``PREFIX`` declarations for any prefix used in
     *sparql_query* but not already declared, so the query is
@@ -1436,107 +1005,63 @@ def _ensure_prefixes(sparql_query, prefixes):
     rdflib resolves undeclared prefixes from the graph's namespace
     bindings at execution time, so queries run inside pynidm even without
     a PREFIX block -- but they aren't portable.  *prefixes* is the
-    ``{prefix: uri}`` map from :func:`_extract_namespace_prefixes`; any
-    well-known prefix not already in it is added as a fallback so a prefix
-    the model used that no loaded file bound still resolves.
+    ``{prefix: uri}`` map from :func:`_extract_namespace_prefixes`.
     """
-    resolved = {**_WELL_KNOWN_PREFIXES, **prefixes}  # graph bindings win
     declared = set(
         re.findall(r"(?im)^\s*PREFIX\s+([A-Za-z][\w.\-]*)\s*:", sparql_query)
     )
     missing = [
         p
-        for p, uri in resolved.items()
+        for p, uri in prefixes.items()
         if p not in declared and re.search(rf"(?<![<\w]){re.escape(p)}:", sparql_query)
     ]
     if not missing:
         return sparql_query
-    header = "\n".join(f"PREFIX {p}: <{resolved[p]}>" for p in sorted(missing))
+    header = "\n".join(f"PREFIX {p}: <{prefixes[p]}>" for p in sorted(missing))
     return header + "\n\n" + sparql_query
 
 
-def _execute_sparql(graph, sparql_query):
-    """Execute a SPARQL query against an already-loaded graph.
-
-    The graph is parsed once up front (and cached) by :func:`_load_graph`; we
-    reuse it here rather than re-parsing every file a second time.
-    """
-    return graph.query(sparql_query)
-
-
-_PREFIX_CONTRACTIONS = (
-    ("niiri:", "http://iri.nidash.org/"),
-    ("nidm:", "http://purl.org/nidash/nidm#"),
-    ("prov:", "http://www.w3.org/ns/prov#"),
-)
-
-# Marker printed in the aligned table for a cell that is UNBOUND (the variable
-# had no value for that subject), so it stays visually distinct from a real
-# literal value of "n/a".  Only used for terminal display; the CSV writes a
-# true empty field for unbound cells.
-_EMPTY_CELL = "."
+def _execute_sparql(nidm_files, sparql_query):
+    """Execute a SPARQL query against the loaded NIDM files."""
+    g = Graph()
+    for f in nidm_files:
+        g.parse(f, format="turtle")
+    return g.query(sparql_query)
 
 
-def _extract_rows(results):
-    """Return ``(columns, rows)`` from a SPARQL result, consumed ONCE.
+def _format_results(results):
+    """Format SPARQL query results as a readable table."""
+    if not results:
+        return "No results found."
 
-    *columns* is the list of variable names; *rows* is a list of lists of
-    display strings, with ``None`` (unbound) rendered as the empty string and
-    well-known namespaces contracted to their prefix.
-    """
-    columns = [str(v) for v in results.vars]
-    rows = []
-    for row in results:
-        cells = []
-        for v in results.vars:
-            val = row[v]
-            if val is None:
-                cells.append("")
-                continue
-            s = str(val)
-            for prefix, ns in _PREFIX_CONTRACTIONS:
-                if s.startswith(ns):
-                    s = prefix + s[len(ns) :]
-                    break
-            cells.append(s)
-        rows.append(cells)
-    return columns, rows
-
-
-def _format_results(columns, rows):
-    """Format extracted ``(columns, rows)`` as a column-aligned table.
-
-    Empty (unbound) cells are shown as ``_EMPTY_CELL`` so wide, sparse
-    multi-source results (e.g. FSL/ANTS/FreeSurfer columns where only one
-    pipeline is present) stay readable instead of collapsing in the terminal.
-    """
+    rows = list(results)
     if not rows:
         return "No results found."
 
-    disp = [[c if c != "" else _EMPTY_CELL for c in r] for r in rows]
-    widths = [len(c) for c in columns]
-    for r in disp:
-        for i, c in enumerate(r):
-            widths[i] = max(widths[i], len(c))
+    vars_ = [str(v) for v in results.vars]
+    header = "\t".join(vars_)
+    lines = [header, "-" * len(header)]
 
-    def _line(cells):
-        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+    for row in rows:
+        values = []
+        for v in results.vars:
+            val = row[v]
+            if val is not None:
+                val_str = str(val)
+                for prefix, ns in [
+                    ("niiri:", "http://iri.nidash.org/"),
+                    ("nidm:", "http://purl.org/nidash/nidm#"),
+                    ("prov:", "http://www.w3.org/ns/prov#"),
+                ]:
+                    if val_str.startswith(ns):
+                        val_str = prefix + val_str[len(ns) :]
+                        break
+                values.append(val_str)
+            else:
+                values.append("")
+        lines.append("\t".join(values))
 
-    lines = [_line(columns), "  ".join("-" * w for w in widths)]
-    lines.extend(_line(r) for r in disp)
     return "\n".join(lines)
-
-
-def _write_results_csv(columns, rows, path):
-    """Write extracted ``(columns, rows)`` to *path* as a proper CSV.
-
-    Unbound cells are written as empty fields (not the display marker), and
-    values are quoted as needed by :mod:`csv`.
-    """
-    with open(path, "w", newline="", encoding="utf-8") as fout:
-        writer = csv.writer(fout)
-        writer.writerow(columns)
-        writer.writerows(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1549,19 +1074,7 @@ def _write_results_csv(columns, rows, path):
     "--nidm_file_list",
     "-nl",
     required=True,
-    help="Comma-separated list of NIDM inputs.  Each entry may be a NIDM file "
-    "(.ttl/.jsonld), a directory (recursed for **/nidm.ttl), a manifest text "
-    "file (.txt/.list, one entry per line, # comments allowed), a glob, or an "
-    "http(s) URL.",
-)
-@click.option(
-    "--with_cdes",
-    "-wc",
-    is_flag=True,
-    default=False,
-    help="Also load the bundled FreeSurfer/FSL/ANTS CDE files (so brain-volume "
-    "data elements resolve without listing them).  Uses the local copy if "
-    "present, else downloads them.",
+    help="A comma-separated list of NIDM files with full path.",
 )
 @click.option(
     "--question",
@@ -1577,7 +1090,7 @@ def _write_results_csv(columns, rows, path):
     required=False,
     default=None,
     type=click.Path(),
-    help="Optional output file for results (CSV format).",
+    help="Optional output file for results (TSV format).",
 )
 @click.option(
     "--show_query",
@@ -1598,7 +1111,7 @@ def _write_results_csv(columns, rows, path):
     "'retrieve these variables' questions and the AI for analytical ones "
     "(counts, averages, group-by, filtering).",
 )
-def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
+def queryai(nidm_file_list, question, output_file, show_query, mode):
     """AI-assisted natural-language query of NIDM files.
 
     Uses a two-phase approach:
@@ -1621,22 +1134,10 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
       pynidm queryai -nl data/nidm.ttl   (interactive mode)
     """
 
-    # Expand the file list: entries may be files, directories (recursed for
-    # **/nidm.ttl), manifest text files, globs, or URLs; optionally append the
-    # bundled CDE files.
-    nidm_files = expand_nidm_file_list(nidm_file_list, include_cdes=with_cdes)
-    if not nidm_files:
-        click.echo(
-            f"Error: no NIDM files found from -nl '{nidm_file_list}' "
-            "(check the path, directory, or manifest).",
-            err=True,
-        )
-        sys.exit(1)
+    # Parse file list
+    nidm_files = [f.strip() for f in nidm_file_list.split(",") if f.strip()]
     for f in nidm_files:
-        # URLs are fetched by rdflib at parse time; only local paths are checked.
-        if not (
-            f.startswith("http://") or f.startswith("https://")
-        ) and not os.path.isfile(f):
+        if not os.path.isfile(f):
             click.echo(f"Error: File not found: {f}", err=True)
             sys.exit(1)
 
@@ -1726,7 +1227,31 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
                     click.echo(f"  Skipping '{name}'.", err=True)
                     continue
 
-            resolved_vars.extend(_coalesce_selected_des(name, role, selected_list))
+            for selected in selected_list:
+                # When multiple DEs are chosen for the same concept,
+                # give each a distinct name so the AI creates separate
+                # SPARQL variables (e.g. left_hippocampus_volume_fs,
+                # left_hippocampus_volume_ants).
+                if len(selected_list) > 1:
+                    suffix = selected.get("qname", "").split(":")[0]
+                    var_name = f"{name} ({suffix})"
+                else:
+                    var_name = name
+
+                resolved_vars.append(
+                    {
+                        "name": var_name,
+                        "role": role,
+                        "qname": selected.get("qname", selected["uri"]),
+                        "uri": selected["uri"],
+                        "label": selected.get("label"),
+                        "laterality": selected.get("laterality"),
+                        "unit": selected.get("unit"),
+                        # value levels (coded -> label), if defined in the data;
+                        # the ONLY licensed source for a coded-value mapping
+                        "levels": selected.get("levels"),
+                    }
+                )
 
         # Show resolved variables
         click.echo("\nResolved variables:", err=True)
@@ -1744,25 +1269,22 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
         # Only resolved vars that have URIs can be queried as predicates.
         vars_with_uris = [v for v in resolved_vars if v.get("uri")]
 
-        # Decide how to build the query (unless the user forced the LLM):
-        #  * per-subject RETRIEVAL of resolved DataElement variables, or
-        #  * subject ENUMERATION ("list the subjects [by site/project]"), or
-        #  * fall back to the AI for analytical / free-form questions.
-        analytical = _looks_analytical(q)
-        use_retrieval = (
-            (mode in ("auto", "deterministic"))
-            and vars_with_uris
-            and (mode == "deterministic" or not analytical)
+        # Decide how to build the query.  The deterministic builder handles the
+        # common per-subject retrieval intent reproducibly; the AI handles
+        # analytical questions (counts/averages/group-by/filtering) and any
+        # case where no variable resolved to a URI.
+        use_deterministic = mode == "deterministic" or (
+            mode == "auto" and vars_with_uris and not _looks_analytical(q)
         )
-        use_enumeration = (
-            mode != "llm"
-            and not use_retrieval
-            and not vars_with_uris
-            and not analytical
-            and _looks_like_subject_enumeration(q)
-        )
+        if mode == "deterministic" and not vars_with_uris:
+            click.echo(
+                "  No variables resolved to URIs; cannot build a deterministic "
+                "query.  Falling back to the AI.",
+                err=True,
+            )
+            use_deterministic = False
 
-        if use_retrieval:
+        if use_deterministic:
             click.echo(
                 "\nPhase 2: Building deterministic SPARQL (person-anchored, "
                 "no LLM)...",
@@ -1783,22 +1305,7 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
                     f"{', '.join(raw)}",
                     err=True,
                 )
-        elif use_enumeration:
-            group = _mentions_project_or_site(q)
-            click.echo(
-                "\nPhase 2: Building deterministic subject-enumeration query "
-                f"({'grouped by project/site, ' if group else ''}DISTINCT, "
-                "no LLM)...",
-                err=True,
-            )
-            sparql_query = _build_enumeration_sparql(group_by_project=group)
         else:
-            if mode == "deterministic":
-                click.echo(
-                    "  No deterministic pattern matched (not a plain variable "
-                    "retrieval or subject enumeration); falling back to the AI.",
-                    err=True,
-                )
             click.echo("\nPhase 2: Generating SPARQL query (AI)...", err=True)
             system_prompt = _build_sparql_prompt(vars_with_uris, prefixes, projects)
             ai_response = _send_to_ai(system_prompt, q)
@@ -1821,18 +1328,14 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
 
         click.echo("Executing query...", err=True)
         try:
-            results = _execute_sparql(g, sparql_query)
-            # Consume the result once; render an aligned table for the terminal
-            # and (optionally) write a proper CSV.
-            columns, rows = _extract_rows(results)
-            click.echo(f"\nResults:\n{_format_results(columns, rows)}")
+            results = _execute_sparql(nidm_files, sparql_query)
+            formatted = _format_results(results)
+            click.echo(f"\nResults:\n{formatted}")
 
             if output_file:
-                _write_results_csv(columns, rows, output_file)
-                click.echo(
-                    f"\nResults written to {output_file} (CSV, " f"{len(rows)} row(s))",
-                    err=True,
-                )
+                with open(output_file, "w", encoding="utf-8") as fout:
+                    fout.write(formatted)
+                click.echo(f"\nResults written to {output_file}", err=True)
 
         except Exception as e:
             click.echo(f"\nSPARQL execution error: {e}", err=True)
