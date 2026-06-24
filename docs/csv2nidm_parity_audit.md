@@ -245,3 +245,43 @@ legacy-side investigation; not blocking the new tool. **Implication for
 `-derivative`:** since `GetParticipantIDs` works, legacy `-derivative`'s
 subject enumeration is fine, so it may produce real output and could be
 a genuine byte-comparison reference (modulo H4–H7).
+
+---
+
+## Addendum (2026-06-24): `-derivative` mode resolved
+
+The harness now has a `derivative` mode (fresh-file `-derivative -out`)
+and legacy **does** produce real output (no N1 crash), so it serves as a
+genuine byte-comparison reference. H4–H8 are all implemented in the new
+LinkML tool and unit-tested; the fresh-file path is now **ISOMORPHIC** to
+legacy after two code changes and three documented intentional divergences.
+
+**Code changes (new tool, fresh-file path `csv2nidm_derivative_project`):**
+
+- **CDE namespace (decision: match legacy).** Derivative data elements are
+  now minted under the producing software's namespace
+  (`<software_url><localname>`, e.g. `http://fsl.org/fa_316atcv`) by passing
+  `cde_namespace={title: url}` to `map_variables_to_terms` — the same
+  mechanism the `-derivative -nidm` path already used. Previously the
+  fresh-file path left them in the instance (`niiri:`) namespace.
+- **Source-CSV provenance (decision: match legacy).** The fresh-file path
+  now creates a `prov:Collection` carrying the input CSV's `nfo:filename`;
+  `_write_nidm_graph` wires the export activity's `prov:used` to it, matching
+  legacy and the assessment-mode provenance shape.
+
+**Documented intentional divergences (new is correct / more complete; the
+harness folds these via `_normalize_derivative_divergences`):**
+
+1. **Type predicate.** Legacy emits the malformed `rdfs:type` for
+   `nidm:DerivativeCollection` and `nidm:SoftwareAgent` (should be
+   `rdf:type`). The new tool emits correct `rdf:type`. (Legacy bug.)
+2. **Entity/activity typing.** The new tool additionally types the entity
+   `nidm:DerivativeObject` and the activity `nidm:Derivative`; legacy emits
+   neither. (New is more complete.)
+3. **`prov:Location` node type.** Legacy stores `source_url` as an
+   `xsd:anyURI` literal; the new tool stores it as a `URIRef` (decision:
+   keep new — a real resource link).
+
+**Harness status:** all three modes green — `assessment` ISOMORPHIC,
+`nidm` NEW-intent verified (legacy data-drop bug), `derivative` ISOMORPHIC
+(modulo the three divergences above).

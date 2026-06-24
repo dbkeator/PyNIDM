@@ -813,7 +813,7 @@ def test_csv2nidm_derivative_freshfile_builds_derivatives(tmp_path: Path):
     """H4: -derivative without -nidm builds a fresh NIDM file of
     Derivatives (one Derivative + DerivativeObject + fresh Person +
     nidm:SoftwareAgent per row, no prov:used since there's no source)."""
-    from rdflib import URIRef
+    from rdflib import Literal, URIRef
     from nidm.linkml.core.namespaces import NIDM as _NIDM
     from nidm.linkml.experiment.tools.csv2nidm import csv2nidm_derivative_project
 
@@ -872,6 +872,33 @@ def test_csv2nidm_derivative_freshfile_builds_derivatives(tmp_path: Path):
     assert locs and all(isinstance(loc, URIRef) for loc in locs)
     # fresh-file derivatives have no source acquisition -> no prov:used
     assert not list(g.subject_objects(PROV.used))
+
+    # derivative CDEs are minted in the producing software's namespace
+    # (http://fsl.org/...), not the instance niiri namespace -- matches legacy.
+    cde_des = list(_cde.subjects(RDF.type, _NIDM["PersonalDataElement"]))
+    assert cde_des, "no CDE definitions emitted"
+    assert all(str(d).startswith("http://fsl.org/") for d in cde_des), [
+        str(d) for d in cde_des
+    ]
+    # the fa measurement uses its software-namespaced CDE uri as the predicate
+    # (the exact localname is a content-derived hash, so resolve it rather than
+    # hard-coding the suffix)
+    fa_cde = list(_cde.subjects(_NIDM["sourceVariable"], Literal("fa")))
+    assert fa_cde, "no fa CDE definition"
+    assert str(fa_cde[0]).startswith("http://fsl.org/"), str(fa_cde[0])
+    assert any(
+        fa_cde[0] in {p for p, _o in g.predicate_objects(d)} for d in dobjs
+    ), "fa CDE uri not used as a measurement predicate"
+
+    # the source CSV is recorded as a prov:Collection carrying its filename
+    # (the export activity's prov:used to it is wired later in
+    # _write_nidm_graph, exercised by the parity harness).
+    from rdflib import Namespace
+
+    nfo = Namespace("http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#")
+    colls = list(g.subjects(RDF.type, PROV.Collection))
+    assert len(colls) == 1, colls
+    assert list(g.objects(colls[0], nfo.filename)), "collection lacks nfo:filename"
 
 
 def test_csv2nidm_main_derivative_with_no_match_short_circuits(

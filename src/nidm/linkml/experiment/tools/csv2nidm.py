@@ -27,11 +27,13 @@ from os.path import basename, dirname, join
 import sys
 from typing import Any, List, Optional, Tuple
 import pandas as pd
-from rdflib import Graph
+from rdflib import RDF, Graph, Literal, URIRef
+from rdflib.namespace import XSD, split_uri
 from .bidsmri2nidm import _pynidm_version, _runtime_platform  # reuse from bidsmri2nidm
 from ..assessment_acquisition import AssessmentAcquisition
 from ..assessment_object import AssessmentObject
 from ..collection import Collection
+from ..core import getUUID
 from ..derivative import Derivative
 from ..derivative_object import DerivativeObject
 from ..person import Person
@@ -48,9 +50,6 @@ from ..utils import (
 )
 from ...core import constants as _C
 from ...core.namespaces import DCT, DCTYPES, NFO, NIDM, NIIRI, PROV, SIO
-from ..core import getUUID
-from rdflib import RDF, Literal, URIRef
-from rdflib.namespace import XSD, split_uri
 
 __version__ = "0.3.0"  # Phase C: -derivative + software metadata
 _log = logging.getLogger(__name__)
@@ -633,9 +632,15 @@ def _create_software_agent_for_derivative(
     g.add((agent, RDF.type, PROV.Agent))
     g.add((agent, DCTYPES.title, Literal(_software_scalar(software_metadata, "title"))))
     g.add(
-        (agent, DCT.description, Literal(_software_scalar(software_metadata, "description")))
+        (
+            agent,
+            DCT.description,
+            Literal(_software_scalar(software_metadata, "description")),
+        )
     )
-    g.add((agent, DCT.hasVersion, Literal(_software_scalar(software_metadata, "version"))))
+    g.add(
+        (agent, DCT.hasVersion, Literal(_software_scalar(software_metadata, "version")))
+    )
     g.add((agent, SIO.URL, Literal(_software_scalar(software_metadata, "url"))))
     return agent
 
@@ -734,12 +739,18 @@ def _materialize_derivative_row(
     # software url + "cmdline"/"platform" (matches legacy lines 728-740).
     software_url = _software_scalar(software_metadata, "url")
     der.graph.add(
-        (der.identifier, URIRef(software_url + "cmdline"),
-         Literal(_software_scalar(software_metadata, "cmdline")))
+        (
+            der.identifier,
+            URIRef(software_url + "cmdline"),
+            Literal(_software_scalar(software_metadata, "cmdline")),
+        )
     )
     der.graph.add(
-        (der.identifier, URIRef(software_url + "platform"),
-         Literal(_software_scalar(software_metadata, "platform")))
+        (
+            der.identifier,
+            URIRef(software_url + "platform"),
+            Literal(_software_scalar(software_metadata, "platform")),
+        )
     )
 
     # Look up the existing Person for this subject so we can attach a
@@ -887,9 +898,7 @@ def csv2nidm_project(
     # (e.g. "0050001") aren't silently coerced to ints (matches legacy).
     if id_field is not None:
         if csv_file.endswith(".tsv"):
-            df = pd.read_csv(
-                csv_file, dtype={id_field: str}, sep="\t", engine="python"
-            )
+            df = pd.read_csv(csv_file, dtype={id_field: str}, sep="\t", engine="python")
         else:
             df = pd.read_csv(csv_file, dtype={id_field: str})
 
@@ -1112,6 +1121,14 @@ def csv2nidm_derivative_project(
     # each row during materialization, not treated as data elements.
     df_for_mapping = df.drop(columns=list(_DERIVATIVE_INPUT_REQUIRED), errors="ignore")
 
+    # Load the software metadata up front so derivative CDEs can be minted in
+    # the producing software's namespace (matches legacy: derivative data
+    # elements live under <software_url>, not the instance niiri namespace).
+    software_metadata = _load_software_metadata(derivative_file)
+    software_title = software_metadata["title"].to_string(index=False).strip()
+    software_url = software_metadata["url"].to_string(index=False).strip()
+    cde_namespace = {software_title: software_url}
+
     column_to_terms, cde = map_variables_to_terms(
         df=df_for_mapping,
         assessment_name=assessment_name,
@@ -1119,6 +1136,7 @@ def csv2nidm_derivative_project(
         output_file=output_file or os.path.join(out_dir, "nidm.ttl"),
         json_source=json_map,
         associate_concepts=associate_concepts,
+        cde_namespace=cde_namespace,
     )
 
     if id_field is None:
@@ -1127,13 +1145,9 @@ def csv2nidm_derivative_project(
     # Re-read the id column as a string so zero-padded ids survive.
     if id_field is not None:
         if csv_file.endswith(".tsv"):
-            df = pd.read_csv(
-                csv_file, dtype={id_field: str}, sep="\t", engine="python"
-            )
+            df = pd.read_csv(csv_file, dtype={id_field: str}, sep="\t", engine="python")
         else:
             df = pd.read_csv(csv_file, dtype={id_field: str})
-
-    software_metadata = _load_software_metadata(derivative_file)
 
     project = Project()
     if dataset_identifier is not None:
@@ -1144,6 +1158,14 @@ def csv2nidm_derivative_project(
                 Literal(dataset_identifier),
             )
         )
+
+    # Record the source CSV as a prov:Collection (carrying its filename) so the
+    # export activity's prov:used links back to it -- matches legacy and the
+    # assessment-mode provenance shape.  _write_nidm_graph wires the prov:used.
+    collection = Collection(project)
+    collection.graph.add(
+        (collection.identifier, NFO.filename, Literal(csv_file, datatype=XSD.string))
+    )
 
     df_columns = list(df.columns)
     for _, row in df.iterrows():
