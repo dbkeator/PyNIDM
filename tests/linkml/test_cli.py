@@ -1,0 +1,67 @@
+"""Tests for the LinkML ``pynidm`` click CLI group and its subcommands."""
+
+from __future__ import annotations
+from pathlib import Path
+from click.testing import CliRunner
+from rdflib import Graph
+from nidm import __version__
+from nidm.linkml.experiment.tools.click_main import cli
+
+_TTL_A = "@prefix ex: <http://example.org/> .\nex:s1 ex:p ex:o1 .\n"
+_TTL_B = "@prefix ex: <http://example.org/> .\nex:s2 ex:p ex:o2 .\n"
+
+
+def test_cli_registers_version_command() -> None:
+    """Importing click_main registers the ``version`` subcommand on the
+    shared cli group (the registration-by-import pattern)."""
+    assert "version" in cli.commands
+
+
+def test_version_command_prints_version() -> None:
+    """``pynidm version`` exits 0 and prints the PyNIDM version string."""
+    result = CliRunner().invoke(cli, ["version"])
+    assert result.exit_code == 0, result.output
+    assert "PyNIDM Version:" in result.output
+    assert __version__ in result.output
+
+
+def test_cli_registers_graph_tools() -> None:
+    """concat, convert and merge are registered on the cli group."""
+    for name in ("concat", "convert", "merge"):
+        assert name in cli.commands, name
+
+
+def test_convert_writes_requested_format(tmp_path: Path) -> None:
+    """``pynidm convert -t n3`` parses the input and writes an .n3 next to
+    it (or in -out), preserving the triples."""
+    src = tmp_path / "in.ttl"
+    src.write_text(_TTL_A)
+    outdir = tmp_path / "converted"
+    outdir.mkdir()
+
+    result = CliRunner().invoke(
+        cli, ["convert", "-nl", str(src), "-t", "n3", "-out", str(outdir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    produced = outdir / "in.n3"
+    assert produced.is_file()
+    g = Graph()
+    g.parse(produced, format="n3")
+    assert len(g) == 1
+
+
+def test_concat_unions_inputs(tmp_path: Path) -> None:
+    """``pynidm concat`` unions the input graphs into one turtle file."""
+    a = tmp_path / "a.ttl"
+    b = tmp_path / "b.ttl"
+    a.write_text(_TTL_A)
+    b.write_text(_TTL_B)
+    out = tmp_path / "out.ttl"
+
+    result = CliRunner().invoke(cli, ["concat", "-nl", f"{a},{b}", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    assert out.is_file()
+    g = Graph()
+    g.parse(out, format="turtle")
+    assert len(g) == 2
