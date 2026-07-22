@@ -32,9 +32,9 @@ def test_version_command_prints_version() -> None:
 
 
 def test_cli_registers_graph_tools() -> None:
-    """concat, convert, merge, query and queryai are registered on the cli
-    group (queryai via the re-registration shim over the legacy command)."""
-    for name in ("concat", "convert", "merge", "query", "queryai"):
+    """concat, convert, merge, query, queryai and visualize are registered on
+    the cli group (queryai/visualize via re-registration shims)."""
+    for name in ("concat", "convert", "merge", "query", "queryai", "visualize"):
         assert name in cli.commands, name
 
 

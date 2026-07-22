@@ -16,6 +16,7 @@ from nidm.linkml.experiment.tools import (  # noqa: F401
     nidm_query,
     nidm_queryai,
     nidm_version,
+    nidm_visualize,
 )
 from nidm.linkml.experiment.tools.click_base import cli
 
