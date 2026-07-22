@@ -3,12 +3,18 @@
 from __future__ import annotations
 from pathlib import Path
 from click.testing import CliRunner
+import pytest
 from rdflib import Graph
 from nidm import __version__
 from nidm.linkml.experiment.tools.click_main import cli
 
 _TTL_A = "@prefix ex: <http://example.org/> .\nex:s1 ex:p ex:o1 .\n"
 _TTL_B = "@prefix ex: <http://example.org/> .\nex:s2 ex:p ex:o2 .\n"
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_NIDM_FIXTURE = (
+    _REPO_ROOT / "tests" / "experiment" / "data" / "read_nidm" / "brainvol_nidm.ttl"
+)
 
 
 def test_cli_registers_version_command() -> None:
@@ -26,9 +32,23 @@ def test_version_command_prints_version() -> None:
 
 
 def test_cli_registers_graph_tools() -> None:
-    """concat, convert and merge are registered on the cli group."""
-    for name in ("concat", "convert", "merge"):
+    """concat, convert, merge and query are registered on the cli group."""
+    for name in ("concat", "convert", "merge", "query"):
         assert name in cli.commands, name
+
+
+def test_query_runs_sparql_over_fixture(tmp_path: Path) -> None:
+    """``pynidm query -nl <file> -q <sparql>`` resolves the file, runs the
+    query through the LinkML query shim, and exits 0.  Exercises the
+    cde/rest/query/nidm_file_utils shims the ported tool imports."""
+    if not _NIDM_FIXTURE.is_file():
+        pytest.skip("NIDM fixture not present in this clone")
+    qf = tmp_path / "q.rq"
+    qf.write_text("SELECT ?s WHERE { ?s ?p ?o } LIMIT 3")
+    result = CliRunner().invoke(
+        cli, ["query", "-nl", str(_NIDM_FIXTURE), "-q", str(qf)]
+    )
+    assert result.exit_code == 0, result.output
 
 
 def test_convert_writes_requested_format(tmp_path: Path) -> None:
