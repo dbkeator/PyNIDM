@@ -49,9 +49,9 @@ from ..utils import (
     redcap_datadictionary_to_json,
 )
 from ...core import constants as _C
-from ...core.namespaces import DCT, DCTYPES, NFO, NIDM, NIIRI, PROV, SIO
+from ...core.namespaces import BIDS, DCT, DCTYPES, NFO, NIDM, NIIRI, PROV, SIO
 
-__version__ = "0.3.0"  # Phase C: -derivative + software metadata
+__version__ = "0.3.1"  # Phase C: -derivative + software metadata; +ses/task/run on fresh-file derivatives
 _log = logging.getLogger(__name__)
 
 
@@ -1063,6 +1063,39 @@ def _materialize_derivative_row_freshfile(
     if "source_url" in df_columns and not pd.isna(df_row["source_url"]):
         der_entity.graph.add(
             (der_entity.identifier, PROV.Location, URIRef(str(df_row["source_url"])))
+        )
+
+    # No BIDS experiment NIDM file was supplied (fresh-file derivative), so store
+    # ses/task/run directly on the derivative entity under the SAME predicates
+    # bidsmri2nidm writes on the image AcquisitionObject (bids:session_number,
+    # nidm:Task, nidm:AcquisitionObject) so the derived data can be linked back to
+    # the correct acquisition by subject_id + ses + task + run.
+    def _nonempty(col: str) -> bool:
+        return col in df_columns and not pd.isna(df_row[col]) and str(df_row[col]) != ""
+
+    if _nonempty("ses"):
+        der_entity.graph.add(
+            (
+                der_entity.identifier,
+                BIDS["session_number"],
+                Literal(str(df_row["ses"]), datatype=XSD.string),
+            )
+        )
+    if _nonempty("task"):
+        der_entity.graph.add(
+            (
+                der_entity.identifier,
+                _C.NIDM_MRI_FUNCTION_TASK,
+                Literal(str(df_row["task"]), datatype=XSD.string),
+            )
+        )
+    if _nonempty("run"):
+        try:
+            run_literal = Literal(int(str(df_row["run"])), datatype=XSD.int)
+        except ValueError:
+            run_literal = Literal(str(df_row["run"]), datatype=XSD.string)
+        der_entity.graph.add(
+            (der_entity.identifier, _C.NIDM_ACQUISITION_ENTITY, run_literal)
         )
 
     # Fresh subject agent (no existing graph to look up).

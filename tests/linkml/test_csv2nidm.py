@@ -900,6 +900,31 @@ def test_csv2nidm_derivative_freshfile_builds_derivatives(tmp_path: Path):
     assert len(colls) == 1, colls
     assert list(g.objects(colls[0], nfo.filename)), "collection lacks nfo:filename"
 
+    # fresh-file derivatives carry ses/task/run on each derivative entity (no
+    # BIDS experiment file was provided), under the same predicates bidsmri2nidm
+    # uses on the acquisition object, so they can be joined to the acquisition by
+    # subject + ses + task + run.  Datatypes match the experiment: task/ses
+    # xsd:string, run xsd:int.
+    from rdflib.namespace import XSD as _XSD
+
+    bids = Namespace("http://bids.neuroimaging.io/")
+    for d in dobjs:
+        assert (
+            d,
+            _NIDM["Task"],
+            Literal("rest", datatype=_XSD.string),
+        ) in g
+        assert (
+            d,
+            _NIDM["AcquisitionObject"],
+            Literal(1, datatype=_XSD.int),
+        ) in g
+        assert (
+            d,
+            bids["session_number"],
+            Literal("1", datatype=_XSD.string),
+        ) in g
+
 
 def test_csv2nidm_main_derivative_with_no_match_short_circuits(
     tmp_path: Path, monkeypatch

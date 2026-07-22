@@ -6,7 +6,7 @@ pick a term to associate with the variable name.  The resulting annotated CSV
 data will then be written to a NIDM data file.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from argparse import ArgumentParser
 from io import StringIO
@@ -1011,9 +1011,34 @@ def csv2nidm_main(args=None):
                 # store other data from row with columns_to_term mappings
                 for row_variable, row_data in csv_row.items():
                     # check if row_variable is subject id, if so skip it
-                    if (row_variable == id_field) or (
-                        row_variable in ["ses", "task", "run"]
-                    ):
+                    if row_variable == id_field:
+                        continue
+                    # No BIDS experiment NIDM file was supplied (fresh-file
+                    # derivative), so rather than dropping ses/task/run store them
+                    # directly on the derivative entity under the SAME predicates
+                    # bidsmri2nidm writes on the image AcquisitionObject
+                    # (bids:session_number, nidm:Task, nidm:AcquisitionObject).
+                    # This lets the derived data be linked back to the correct
+                    # image acquisition by subject_id + ses + task + run when both
+                    # the derivative and experiment NIDM files are queried together.
+                    elif row_variable in ["ses", "task", "run"]:
+                        if str(row_data) not in ("nan", ""):
+                            if row_variable == "ses":
+                                der_entity.add_attributes(
+                                    {Constants.BIDS["session_number"]: str(row_data)}
+                                )
+                            elif row_variable == "task":
+                                der_entity.add_attributes(
+                                    {Constants.NIDM_MRI_FUNCTION_TASK: str(row_data)}
+                                )
+                            else:  # run -> stored as an int to match the experiment
+                                try:
+                                    run_val = int(str(row_data))
+                                except ValueError:
+                                    run_val = str(row_data)
+                                der_entity.add_attributes(
+                                    {Constants.NIDM_ACQUISITION_ENTITY: run_val}
+                                )
                         continue
                     elif row_variable == "source_url":
                         der_entity.add_attributes(
