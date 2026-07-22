@@ -48,10 +48,35 @@ def test_cli_registers_linear_regression() -> None:
 
 def test_nidm_utils_main_is_exposed() -> None:
     """The nidm_utils console-script entry point is importable under the LinkML
-    namespace (interim shim over the legacy main)."""
+    namespace and is the native implementation (uses the LinkML read_nidm)."""
+    from nidm.linkml.experiment.tools import nidm_utils
+
+    assert callable(nidm_utils.main)
+    # native port: read_nidm is imported from the LinkML utils, not legacy
+    assert nidm_utils.read_nidm.__module__ == "nidm.linkml.experiment.utils"
+
+
+def test_nidm_utils_concat(tmp_path: Path, monkeypatch) -> None:
+    """``nidm_utils concat`` unions the input NIDM files into one turtle file
+    (native, prov-free rdflib path)."""
+    import sys
     from nidm.linkml.experiment.tools.nidm_utils import main
 
-    assert callable(main)
+    a = tmp_path / "a.ttl"
+    b = tmp_path / "b.ttl"
+    out = tmp_path / "merged.ttl"
+    a.write_text(_TTL_A)
+    b.write_text(_TTL_B)
+
+    monkeypatch.setattr(
+        sys, "argv", ["nidm_utils", "concat", "-nl", str(a), str(b), "-o", str(out)]
+    )
+    main()
+
+    assert out.is_file()
+    g = Graph()
+    g.parse(out, format="turtle")
+    assert len(g) == 2
 
 
 def test_query_runs_sparql_over_fixture(tmp_path: Path) -> None:
