@@ -11,6 +11,7 @@ toolset (task 8).
 from nidm.linkml.experiment.tools import (  # noqa: F401
     nidm_concat,
     nidm_convert,
+    nidm_linreg,
     nidm_merge,
     nidm_query,
     nidm_queryai,

@@ -38,6 +38,22 @@ def test_cli_registers_graph_tools() -> None:
         assert name in cli.commands, name
 
 
+def test_cli_registers_linear_regression() -> None:
+    """The linear_regression command is registered on the cli group via the
+    re-registration shim over the legacy command."""
+    from nidm.experiment.tools.nidm_linreg import linear_regression
+
+    assert linear_regression.name in cli.commands
+
+
+def test_nidm_utils_main_is_exposed() -> None:
+    """The nidm_utils console-script entry point is importable under the LinkML
+    namespace (interim shim over the legacy main)."""
+    from nidm.linkml.experiment.tools.nidm_utils import main
+
+    assert callable(main)
+
+
 def test_query_runs_sparql_over_fixture(tmp_path: Path) -> None:
     """``pynidm query -nl <file> -q <sparql>`` resolves the file, runs the
     query through the LinkML query shim, and exits 0.  Exercises the
