@@ -237,6 +237,22 @@ class Core:
     #: Legacy camelCase alias for :meth:`serialize_jsonld`.
     serializeJSONLD = serialize_jsonld
 
+    # ------------------------------------------------------------------
+    # Visualization
+    # ------------------------------------------------------------------
+
+    def save_DotGraph(self, filename, format=None):  # noqa: A002,N802
+        """Render this node's graph as a provenance diagram.
+
+        *format* is ``"svg"`` (default), ``"png"`` or ``"pdf"``.  Prov-free
+        replacement for the legacy method: builds the pydot graph directly from
+        the RDF triples (see :mod:`nidm.linkml.experiment.dotgraph`).  Requires
+        the graphviz ``dot`` executable at runtime.
+        """
+        from .dotgraph import save_dotgraph
+
+        return save_dotgraph(self.graph, filename, format=format)
+
     def write(
         self,
         destination: PathLike,
