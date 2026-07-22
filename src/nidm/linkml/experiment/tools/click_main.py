@@ -13,6 +13,7 @@ from nidm.linkml.experiment.tools import (  # noqa: F401
     nidm_convert,
     nidm_merge,
     nidm_query,
+    nidm_queryai,
     nidm_version,
 )
 from nidm.linkml.experiment.tools.click_base import cli
