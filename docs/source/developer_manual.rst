@@ -9,14 +9,12 @@ developers who want to maintain, extend, or simply understand the codebase.
 
 .. note::
 
-   **State of the codebase.** PyNIDM has completed a full *prov-free LinkML
-   refactor*. The maintained implementation lives in ``src/nidm/linkml/`` and
-   depends only on `rdflib <https://rdflib.readthedocs.io>`_ — not the
-   ``prov`` toolbox. The original prov-toolbox implementation
-   (``src/nidm/experiment`` wrapper classes and ``src/nidm/core``) is still on
-   disk for backward compatibility but is **optional**: it is installed only
-   with the ``[legacy]`` extra (``pip install pynidm[legacy]``). New code
-   should target ``nidm.linkml.experiment``.
+   The maintained implementation lives in ``src/nidm/linkml/`` and is built
+   directly on `rdflib <https://rdflib.readthedocs.io>`_. An earlier
+   implementation under ``src/nidm/experiment`` and ``src/nidm/core`` remains
+   available for backward compatibility as an optional install — see
+   :ref:`migrating-from-legacy` at the end of this manual. New code should
+   target ``nidm.linkml.experiment``.
 
 
 .. contents:: On this page
@@ -24,100 +22,15 @@ developers who want to maintain, extend, or simply understand the codebase.
    :depth: 2
 
 
-1. Why the refactor, and where it landed
-=========================================
+1. Why schema-driven?
+=====================
 
-The legacy PyNIDM was built on top of ``prov-toolbox`` (the ``prov`` Python
-package). Three problems compounded over time:
-
-#. **prov-toolbox adds an indirection layer over rdflib.** Every "add a triple"
-   call went through a ``prov.Document`` → ``prov.QualifiedName`` →
-   convert-back-to-rdflib chain that was slow, verbose, and brittle.
-#. **The data model was hand-written and scattered.** Adding a field meant
-   editing a wrapper class *and* a constants file *and* sometimes ``Utils``.
-#. **The CLI tools duplicated attribute-mapping logic** that belonged in
-   shared helpers.
-
-The refactor addressed all three, and is now complete:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 45 55
-
-   * - Before
-     - After
-   * - ``prov.Document`` + ad-hoc ``rdflib.Graph`` mixing
-     - Pure ``rdflib.Graph`` (no ``prov`` import anywhere in ``nidm.linkml``)
-   * - Hand-written constants in ``nidm.core``
-     - A LinkML schema generates Pydantic classes; constants are ``URIRef`` helpers
-   * - Each tool re-implements attribute mapping
-     - Shared ``add_attributes_with_cde``, ``_write_nidm_graph``, export provenance
-   * - ``read_nidm``: ~540 lines, prov-coupled
-     - ``read_nidm``: rdflib-native
-   * - ``prov`` a hard dependency
-     - ``prov`` optional; default ``pip install pynidm`` pulls no prov
-
-The end state is a thin, schema-driven, test-covered codebase that contributors
-can extend without learning prov-toolbox semantics.
-
-
-2. Package layout and the prov-free boundary
-============================================
+PyNIDM's data model is described **once**, in a LinkML schema. Everything else
+is derived from it. The stack, from ground truth to what a user calls:
 
 .. code-block:: text
 
-   src/nidm/
-   ├── linkml/                     # MAINTAINED, prov-free
-   │   ├── experiment/
-   │   │   ├── core.py             # Core: shared rdflib.Graph, serialization
-   │   │   ├── linkml_node.py      # LinkMLBackedNode: schema->triples engine
-   │   │   ├── project.py, session.py, acquisition.py, ...   # wrapper classes
-   │   │   ├── query.py, navigate.py, cde.py                 # SPARQL query layer
-   │   │   ├── dotgraph.py          # prov-free provenance visualization
-   │   │   ├── utils.py             # read_nidm + the ported helper toolkit
-   │   │   ├── _constants_compat.py # Constants bridge (see below)
-   │   │   └── tools/               # CLI tools (bidsmri2nidm, csv2nidm, rest, ...)
-   │   ├── core/
-   │   │   ├── constants.py         # URIRef term constants
-   │   │   ├── namespaces.py        # prefix -> rdflib.Namespace bindings
-   │   │   └── bids_constants.py    # BIDS key -> NIDM predicate maps
-   │   ├── generated/               # AUTO-GENERATED from the schema (do not edit)
-   │   │   ├── nidm_schema_pydantic.py
-   │   │   └── nidm_schema_meta.py
-   │   └── workflows/               # LinkML NIDM-Statistics (placeholder)
-   ├── experiment/                  # LEGACY (prov), optional [legacy] extra
-   │   ├── __init__.py              # lazily imports wrappers; prov-free to import
-   │   ├── Query.py, CDE.py, Navigate.py, tools/rest.py   # REVERSE-SHIMS -> nidm.linkml
-   │   ├── schema/nidm_schema.yaml  # the LinkML schema (source of truth)
-   │   └── ... prov wrapper classes ...
-   └── core/                        # LEGACY constants (prov), optional
-
-The important boundaries:
-
-* **Nothing in ``nidm.linkml`` imports ``prov`` or ``nidm.core`` or
-  ``nidm.experiment``.** This is enforced by
-  ``tests/linkml/test_prov_free.py``, which blocks ``prov`` at import time and
-  asserts the shipped CLI still imports and runs.
-* **The legacy query/navigation layer is now a set of reverse-shims.**
-  ``nidm.experiment.Query``, ``nidm.experiment.CDE``, ``nidm.experiment.Navigate``
-  and ``nidm.experiment.tools.rest`` are thin modules that re-export the real
-  implementations from ``nidm.linkml``. (This direction is the *opposite* of
-  the transitional state during the refactor.)
-* **The legacy wrapper classes** (``Project``, ``Session``, ... under
-  ``nidm.experiment``) require ``prov``. ``nidm.experiment.__init__`` imports
-  them inside a ``try/except ImportError`` so that importing a reverse-shim does
-  not pull ``prov``; accessing a wrapper without the extra raises a helpful
-  ``pip install pynidm[legacy]`` error.
-
-
-3. The 30-second mental model
-=============================
-
-There are four layers, from ground truth to what the user sees:
-
-.. code-block:: text
-
-   Layer 1: LinkML schema (nidm_schema.yaml)              <- source of truth
+   Layer 1: LinkML schema (nidm_schema.yaml)              <- single source of truth
      |  python scripts/regen_schema.py
    Layer 2: Generated Pydantic classes
             (src/nidm/linkml/generated/nidm_schema_pydantic.py)
@@ -128,20 +41,58 @@ There are four layers, from ground truth to what the user sees:
    Layer 4: CLI tools (bidsmri2nidm, csv2nidm, query, ...)
             (src/nidm/linkml/experiment/tools/*.py)
 
-When a tool wants to emit ``(Project) → dctypes:title → "ABIDE"``:
+Why this arrangement is worth the indirection:
 
-* The tool calls ``Project(title="ABIDE")``.
-* The generated Pydantic class validates that ``title`` is a valid field.
-* The wrapper's ``_emit_field_triples()`` looks up the slot's ``slot_uri`` in
-  the generated class's ``linkml_meta`` (sourced from the schema), expands the
-  CURIE (``dctypes:title`` → ``<http://purl.org/dc/dcmitype/title>``), and
-  emits the triple onto an ``rdflib.Graph``.
+* **One source of truth.** A class, a slot, and the RDF predicate it maps to are
+  declared in the schema. The generated Pydantic classes and the runtime triple
+  emission both read from that declaration, so they can never drift apart.
+* **Validation for free.** The generated Pydantic layer enforces field names,
+  types, required fields, and enum values before a single triple is written.
+* **No hand-maintained predicate tables.** Because the wrapper layer looks up a
+  slot's ``slot_uri`` from the generated metadata at runtime, adding or changing
+  a predicate is a schema edit plus a regenerate — no wrapper code changes.
+* **The graph is the data.** Wrappers build a plain ``rdflib.Graph``; there is
+  no separate document model to keep in sync. Every triple round-trips.
+* **Shared helpers, not per-tool copies.** Attribute mapping, export provenance,
+  and CDE attachment live in one place (``utils.py``) and are reused by every
+  tool.
 
-**No layer hard-codes which predicate to use.** Change the schema's
-``slot_uri``, regenerate, and the wrapper picks up the new mapping for free.
+The concrete effect: to emit ``(Project) → dctypes:title → "ABIDE"`` a tool just
+calls ``Project(title="ABIDE")``. Pydantic validates ``title`` is a real field;
+the wrapper's ``_emit_field_triples()`` reads the slot's ``slot_uri`` from the
+generated ``linkml_meta`` (sourced from the schema), expands the CURIE
+(``dctypes:title`` → ``<http://purl.org/dc/dcmitype/title>``), and writes the
+triple. **No layer hard-codes the predicate.**
 
 
-4. The schema is the source of truth
+2. Package layout
+=================
+
+.. code-block:: text
+
+   src/nidm/linkml/
+   ├── experiment/
+   │   ├── core.py             # Core: shared rdflib.Graph, serialization, UUIDs
+   │   ├── linkml_node.py      # LinkMLBackedNode: schema -> triples engine
+   │   ├── project.py, session.py, acquisition.py, ...   # wrapper classes
+   │   ├── query.py, navigate.py, cde.py                 # SPARQL query layer
+   │   ├── dotgraph.py         # provenance visualization (rdflib -> pydot)
+   │   ├── utils.py            # read_nidm + the ported helper toolkit
+   │   ├── _constants_compat.py  # Constants bridge for the query layer
+   │   └── tools/              # CLI tools (bidsmri2nidm, csv2nidm, rest, ...)
+   ├── core/
+   │   ├── constants.py        # URIRef term constants
+   │   ├── namespaces.py       # prefix -> rdflib.Namespace bindings
+   │   └── bids_constants.py   # BIDS key -> NIDM predicate maps
+   ├── generated/              # AUTO-GENERATED from the schema (do not edit)
+   │   ├── nidm_schema_pydantic.py
+   │   └── nidm_schema_meta.py
+   └── workflows/              # LinkML NIDM-Statistics (placeholder)
+
+The schema itself lives at ``src/nidm/experiment/schema/nidm_schema.yaml``.
+
+
+3. The schema is the source of truth
 ====================================
 
 **File:** ``src/nidm/experiment/schema/nidm_schema.yaml``
@@ -212,7 +163,7 @@ Both generated files are committed, so downstream users do not need ``linkml``
 installed — only contributors editing the schema do.
 
 
-5. The wrapper layer
+4. The wrapper layer
 ====================
 
 **Directory:** ``src/nidm/linkml/experiment/``
@@ -299,7 +250,7 @@ When to use the wrapper API vs raw rdflib
   the tools do for BIDS-specific data.
 
 
-6. Serialization and loading
+5. Serialization and loading
 ============================
 
 All serialization lives on ``Core`` (inherited by every wrapper). Build a graph
@@ -320,10 +271,10 @@ by constructing wrappers against a shared ``rdflib.Graph``, then serialize:
    project.save_DotGraph("out.svg", format="svg")  # provenance diagram
 
 There is no single ``serialize()`` — the format-specific methods (and their
-camelCase aliases, kept for porting) are the API. **The ``rdflib.Graph`` is the
-data**, so every triple round-trips.
+camelCase aliases) are the API. **The ``rdflib.Graph`` is the data**, so every
+triple round-trips.
 
-**Visualization** is prov-free: ``dotgraph.build_nidm_dotgraph(graph)`` builds a
+**Visualization:** ``dotgraph.build_nidm_dotgraph(graph)`` builds a
 ``pydot.Dot`` directly from RDF triples (nodes categorized as
 ``prov:Activity`` / ``Entity`` / ``Agent``, ``qualifiedAssociation`` blank nodes
 collapsed into direct edges). ``save_dotgraph`` renders svg/png/pdf via the
@@ -343,12 +294,10 @@ rdflib-readable RDF, finds the first ``nidm:Project`` subject, wraps it via
    restore the canonical prefix set.
 
 
-7. The query layer
+6. The query layer
 ==================
 
-The SPARQL query API is now native to ``nidm.linkml`` (legacy
-``nidm.experiment.Query`` / ``Navigate`` / ``CDE`` / ``tools.rest`` are
-reverse-shims that re-export it).
+The SPARQL query API is native to ``nidm.linkml``:
 
 * ``nidm.linkml.experiment.query`` — ``sparql_query_nidm(nidm_file_list, query,
   ...)``, ``GetMergedGraph``, ``OpenGraph``, the ``GetProject*`` /
@@ -366,20 +315,17 @@ reverse-shims that re-export it).
 
 .. note::
 
-   ``_constants_compat.Constants`` is a small bridge exposing a
+   ``_constants_compat.Constants`` is a small bridge that exposes a
    ``Constants``-shaped object (assembled from ``core.constants`` +
-   ``core.namespaces``) to these relocated modules so they carry no prov
-   dependency. Its ``namespaces`` map is filtered to exactly the legacy key set
-   so ``matchPrefix`` / ``trimWellKnownURIPrefix`` compression is byte-identical
-   to legacy output. When the legacy tree is eventually removed, this bridge can
-   fold into ``core.constants`` directly.
+   ``core.namespaces``) to the query modules. Its ``namespaces`` map is filtered
+   to a specific key set so ``matchPrefix`` / ``trimWellKnownURIPrefix``
+   compression matches the historical output byte-for-byte.
 
 
-8. utils.py — the helper toolkit
+7. utils.py — the helper toolkit
 ================================
 
-**File:** ``src/nidm/linkml/experiment/utils.py`` (the rdflib-native port of the
-legacy 4139-line ``nidm.experiment.Utils``).
+**File:** ``src/nidm/linkml/experiment/utils.py``
 
 The functions you will touch most:
 
@@ -399,7 +345,7 @@ The functions you will touch most:
 the entire scientific-Python stack at startup.
 
 
-9. How to change the model (worked walkthrough)
+8. How to change the model (worked walkthrough)
 ===============================================
 
 This is the core maintenance workflow. Two cases.
@@ -492,8 +438,8 @@ walk branch in ``_populate_project_children()`` in
        assert (n.identifier, RDF.type, NIDM.YourClass) in n.graph
 
 
-10. How to add a CLI tool
-=========================
+9. How to add a CLI tool
+========================
 
 The shipped tools live in ``src/nidm/linkml/experiment/tools/`` and register
 themselves on the ``pynidm`` click group.
@@ -520,7 +466,7 @@ themselves on the ``pynidm`` click group.
    ``git add`` and re-commit).
 
 
-11. Testing
+10. Testing
 ===========
 
 .. code-block:: bash
@@ -528,28 +474,27 @@ themselves on the ``pynidm`` click group.
    pytest tests/linkml/ -x                       # maintained suite, stop on first fail
    pytest tests/linkml/test_<file>.py -v         # one file
    pytest tests/linkml/ -k "csv2nidm and derivative"   # filter by name
-   pytest tests/experiment/ -q                   # legacy suite (needs the [legacy] extra)
 
-Key suites:
+The key correctness gate is ``tests/linkml/test_parity.py`` — round-trip /
+isomorphism tests. It parametrizes over the repo-tracked fixtures in
+``FIXTURE_PATHS``; drop your own ``.ttl`` files into the gitignored
+``tests/linkml/local_fixtures/`` to stress-test locally without changing anyone
+else's collected count. When you add a *shared* fixture, add it to
+``FIXTURE_PATHS`` **and commit the file**.
 
-* ``tests/linkml/test_parity.py`` — round-trip / isomorphism correctness gate.
-  It parametrizes over the repo-tracked fixtures in ``FIXTURE_PATHS``; drop your
-  own ``.ttl`` files into the gitignored ``tests/linkml/local_fixtures/`` to
-  stress-test locally without changing anyone else's collected count. When you
-  add a *shared* fixture, add it to ``FIXTURE_PATHS`` **and commit the file**.
-* ``tests/linkml/test_prov_free.py`` — the **prov-removal guard**. It installs
-  an import blocker that makes ``import prov`` fail, purges cached
-  ``prov``/``nidm`` modules, and asserts (a) the shipped ``pynidm`` CLI and the
-  query/navigate/cde/rest layers still import, (b) the legacy reverse-shims
-  import prov-free, and (c) accessing a legacy wrapper without ``prov`` raises a
-  helpful ``pynidm[legacy]`` error. **If you add code to ``nidm.linkml``, keep
-  it prov-free or this test will fail.**
+Useful patterns banked in the suite:
 
-To run the legacy suite you need ``prov``: ``pip install -e '.[devel]'`` (which
-includes the ``[legacy]`` extra) or ``pip install -e '.[legacy]'``.
+* **``_FakeArgs``** — a minimal namespace-shaped class for testing
+  argparse-coupled code without hand-rolling argv.
+* **Fixture builders return Paths** — helpers take ``tmp_path`` and a few
+  kwargs, build a real file, and return the Path.
+* **End-to-end fixtures use the tools themselves** — e.g. build a base NIDM
+  file with ``csv2nidm`` rather than hand-rolling rdflib graphs.
+* **Mock ``builtins.input``** for interactive helpers
+  (``monkeypatch.setattr("builtins.input", lambda _: "1")``).
 
 
-12. Common gotchas
+11. Common gotchas
 ==================
 
 **"Unknown CURIE prefix in 'schema:name'" after read_nidm.**
@@ -562,11 +507,6 @@ You passed a kwarg the schema does not model. Either add the slot to the schema
 and regenerate, or add the triple manually:
 ``obj.graph.add((obj.identifier, predicate, value))``.
 
-**Keep ``nidm.linkml`` prov-free.**
-Do not ``import prov`` (or anything that transitively imports it, e.g.
-``nidm.core``/``nidm.experiment`` internals) from ``nidm.linkml``. The reverse-
-shims and ``test_prov_free.py`` depend on this boundary.
-
 **Pre-commit modifies files and the commit fails.**
 That is pre-commit signaling it reformatted; ``git add`` the changes and commit
 again.
@@ -578,7 +518,7 @@ cover, so it fell through to an interactive ``input()`` prompt. Pass
 covered columns.
 
 
-13. Glossary
+12. Glossary
 ============
 
 CDE
@@ -603,16 +543,12 @@ PROV
 slot / slot_uri
   LinkML's term for a class property, and the RDF predicate URI it maps to.
 
-reverse-shim
-  A legacy module (e.g. ``nidm.experiment.Query``) that re-exports the real,
-  relocated implementation from ``nidm.linkml`` for backward compatibility.
-
 ``from_existing_subject``
   Wrapper classmethod that binds a wrapper to an existing graph subject without
   emitting new triples. Used by ``read_nidm``.
 
 
-14. Appendix: where to find things
+13. Appendix: where to find things
 ==================================
 
 .. list-table::
@@ -630,8 +566,72 @@ reverse-shim
    * - Trace what triples a wrapper emits
      - ``LinkMLBackedNode._emit_field_triples()`` in ``src/nidm/linkml/experiment/linkml_node.py``
    * - Understand the SPARQL query helpers
-     - ``src/nidm/linkml/experiment/query.py`` and ``navigate.py`` (native here; legacy paths are reverse-shims)
+     - ``src/nidm/linkml/experiment/query.py`` and ``navigate.py``
    * - See the canonical prefix set
      - ``NAMESPACES`` in ``src/nidm/linkml/core/namespaces.py``
-   * - Confirm the codebase stays prov-free
-     - ``tests/linkml/test_prov_free.py``
+
+
+.. _migrating-from-legacy:
+
+14. Migrating from the legacy API
+=================================
+
+Earlier PyNIDM versions were built on the ``prov`` toolbox (prov-toolbox). That
+implementation still ships for backward compatibility, and this section is for
+maintainers of downstream code that imported from it.
+
+What changed
+------------
+
+* The **maintained implementation is ``nidm.linkml``** and is installed by the
+  default ``pip install pynidm``. It is built directly on rdflib.
+* The **legacy wrapper classes** — ``Project``, ``Session``, ``Acquisition``,
+  ... under ``nidm.experiment`` — and ``nidm.core`` are now **optional**. Install
+  them with the ``legacy`` extra:
+
+  .. code-block:: bash
+
+     pip install pynidm[legacy]
+
+* The **query / navigation / CDE / REST layers moved** into ``nidm.linkml``.
+  The legacy import paths still work: ``nidm.experiment.Query``,
+  ``nidm.experiment.CDE``, ``nidm.experiment.Navigate`` and
+  ``nidm.experiment.tools.rest`` are thin re-exports of the implementations now
+  living in ``nidm.linkml``, and they import without the ``legacy`` extra.
+
+Import migration
+----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - Legacy import
+     - Preferred import
+   * - ``from nidm.experiment import Project, Session``
+     - ``from nidm.linkml.experiment import Project, Session``
+   * - ``from nidm.experiment.Query import sparql_query_nidm``
+     - ``from nidm.linkml.experiment.query import sparql_query_nidm``
+   * - ``from nidm.experiment import Navigate``
+     - ``from nidm.linkml.experiment import navigate``
+   * - ``from nidm.experiment.tools.rest import RestParser``
+     - ``from nidm.linkml.experiment.tools.rest import RestParser``
+
+The legacy paths remain as compatibility shims for a deprecation window; new
+code should use the ``nidm.linkml`` paths.
+
+How the compatibility layer behaves
+-----------------------------------
+
+* ``nidm.experiment.__init__`` imports the legacy wrapper classes lazily, so
+  importing a re-exported module (e.g. ``nidm.experiment.Query``) works whether
+  or not the ``legacy`` extra is installed. Accessing a legacy wrapper class
+  without the extra raises a clear error pointing to
+  ``pip install pynidm[legacy]``.
+* The API surface of the legacy wrappers is unchanged; the difference is where
+  the code lives and how it is installed.
+
+A guard test, ``tests/linkml/test_prov_free.py``, exercises this boundary: it
+confirms the default (``nidm.linkml``) install path works without the legacy
+dependency present, and that the compatibility shims resolve correctly. If you
+extend ``nidm.linkml``, keep that test passing.
