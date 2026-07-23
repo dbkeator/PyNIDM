@@ -84,15 +84,19 @@ def test_navigate_shim_re_exports_identical_callable(name):
 # ---------------------------------------------------------------------------
 
 
-def test_query_all_matches_legacy_public_surface():
-    """__all__ should mirror the legacy module's public name set."""
-    expected = {name for name in dir(_legacy_query) if not name.startswith("_")}
-    assert set(new_query.__all__) == expected
+def test_query_public_surface_matches_legacy():
+    """After cutover step 4, ``query`` is the native implementation and the
+    legacy ``nidm.experiment.Query`` is a reverse-shim (``from ... import *``),
+    so the two modules expose an identical public surface."""
+    new_names = {name for name in dir(new_query) if not name.startswith("_")}
+    legacy_names = {name for name in dir(_legacy_query) if not name.startswith("_")}
+    assert legacy_names == new_names
 
 
-def test_navigate_all_matches_legacy_public_surface():
-    expected = {name for name in dir(_legacy_navigate) if not name.startswith("_")}
-    assert set(new_navigate.__all__) == expected
+def test_navigate_public_surface_matches_legacy():
+    new_names = {name for name in dir(new_navigate) if not name.startswith("_")}
+    legacy_names = {name for name in dir(_legacy_navigate) if not name.startswith("_")}
+    assert legacy_names == new_names
 
 
 # ---------------------------------------------------------------------------

@@ -1,23 +1,70 @@
-"""
-nidm.linkml.experiment.cde -- transitional shim re-exporting the
-prov-free legacy CDE helpers at ``nidm.experiment.CDE``.
+import hashlib
+from os import environ, path
+import pickle
+import tempfile
+from rdflib import Graph
+from nidm.linkml.experiment._constants_compat import Constants
+from nidm.util import urlretrieve
 
-Like :mod:`nidm.linkml.experiment.query`, the legacy CDE layer is
-already rdflib-native, so no rewrite is needed.  Tools port by changing
-one import line:
 
-    # before
-    from nidm.experiment.CDE import getCDEs
-    # after
-    from nidm.linkml.experiment.cde import getCDEs
+def download_cde_files():
+    cde_dir = tempfile.gettempdir()
 
-At cutover (task 12) the physical file moves into this package and the
-legacy path becomes a reverse-shim re-exporting from here.
-"""
-from __future__ import annotations
-from nidm.experiment import CDE as _CDE  # noqa: E402
-from nidm.experiment.CDE import *  # noqa: F401, F403
+    for url in Constants.CDE_FILE_LOCATIONS:
+        urlretrieve(url, f"{cde_dir}/{url.split('/')[-1]}")
 
-__all__ = [name for name in dir(_CDE) if not name.startswith("_")]
+    return cde_dir
 
-del _CDE
+
+def getCDEs(file_list=None):
+    if getCDEs.cache:
+        return getCDEs.cache
+
+    hasher = hashlib.md5()
+    hasher.update(str(file_list).encode("utf-8"))
+    h = hasher.hexdigest()
+
+    cache_file_name = tempfile.gettempdir() + f"/cde_graph.{h}.pickle"
+
+    if path.isfile(cache_file_name):
+        with open(cache_file_name, "rb") as fp:
+            rdf_graph = pickle.load(fp)
+        getCDEs.cache = rdf_graph
+        return rdf_graph
+
+    rdf_graph = Graph()
+
+    if not file_list:
+        cde_dir = ""
+        if "CDE_DIR" in environ:
+            cde_dir = environ["CDE_DIR"]
+
+        if (not cde_dir) and (
+            path.isfile("/opt/project/nidm/core/cde_dir/ants_cde.ttl")
+        ):
+            cde_dir = "/opt/project/nidm/core/cde_dir"
+
+        if not cde_dir:
+            cde_dir = download_cde_files()
+
+        file_list = []
+        for f in ["ants_cde.ttl", "fs_cde.ttl", "fsl_cde.ttl"]:
+            fname = f"{cde_dir}/{f}"
+            if path.isfile(fname):
+                file_list.append(fname)
+
+    for fname in file_list:
+        if path.isfile(fname):
+            import nidm.linkml.experiment.query
+
+            cde_graph = nidm.linkml.experiment.query.OpenGraph(fname)
+            rdf_graph = rdf_graph + cde_graph
+
+    with open(cache_file_name, "wb") as cache_file:
+        pickle.dump(rdf_graph, cache_file)
+
+    getCDEs.cache = rdf_graph
+    return rdf_graph
+
+
+getCDEs.cache = None
