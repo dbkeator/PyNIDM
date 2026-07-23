@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from click.testing import CliRunner
 from rdflib import Graph
-from nidm.experiment.tools import nidm_queryai as _qai
-from nidm.experiment.tools.nidm_queryai import (
+from nidm.linkml.experiment.tools import nidm_queryai as _qai
+from nidm.linkml.experiment.tools.nidm_queryai import (
     _build_deterministic_sparql,
     _extract_data_elements,
     _looks_analytical,
@@ -71,7 +71,7 @@ niiri:DX_nolevels a nidm:PersonalDataElement ;
 def test_get_provider_selects_local_llama(monkeypatch) -> None:
     """A configured local LLaMA server (PYNIDM_LLAMA_URL) selects the 'llama'
     provider when no cloud key is present; an explicit PYNIDM_AI_PROVIDER wins."""
-    from nidm.experiment.tools.nidm_queryai import _get_provider
+    from nidm.linkml.experiment.tools.nidm_queryai import _get_provider
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -86,7 +86,7 @@ def test_get_provider_selects_local_llama(monkeypatch) -> None:
 def test_query_llama_posts_openai_format_and_parses(monkeypatch) -> None:
     """_query_llama POSTs an OpenAI chat payload to <url>/chat/completions and
     returns choices[0].message.content (no API key, no real server)."""
-    from nidm.experiment.tools import nidm_queryai as q
+    from nidm.linkml.experiment.tools import nidm_queryai as q
 
     captured = {}
 
@@ -116,7 +116,7 @@ def test_query_llama_posts_openai_format_and_parses(monkeypatch) -> None:
 def test_get_api_key_is_provider_aware(monkeypatch) -> None:
     """The provider-specific key is selected even when both are set, so
     PYNIDM_AI_PROVIDER=openai uses OPENAI_API_KEY (not the Anthropic key)."""
-    from nidm.experiment.tools.nidm_queryai import _get_api_key
+    from nidm.linkml.experiment.tools.nidm_queryai import _get_api_key
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-xxx")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-yyy")
