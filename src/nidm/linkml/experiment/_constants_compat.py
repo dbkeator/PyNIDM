@@ -15,6 +15,14 @@ _EXCLUDED = ("prov", "rdf", "xsd", "skos", "schema")
 
 
 class _Constants:
+    """Namespace/URI constant table mirroring the legacy ``Constants`` API.
+
+    Exposes the subset of ``nidm.core.Constants`` attributes the relocated
+    query/cde/navigate/rest modules actually use, sourced from
+    :mod:`nidm.linkml.core`, with a ``namespaces`` map filtered to the exact
+    legacy key set for byte-identical prefix compression.
+    """
+
     # rdflib Namespace objects
     NIDM = _ns.NIDM
     NIIRI = _ns.NIIRI

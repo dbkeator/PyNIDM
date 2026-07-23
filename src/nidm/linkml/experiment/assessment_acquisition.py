@@ -36,6 +36,14 @@ class AssessmentAcquisition(Acquisition):
         extra_types: Optional[List] = None,
         **fields: Any,
     ) -> None:
+        """Construct an AssessmentAcquisition typed as instrument-based assessment.
+
+        Args:
+            session: parent Session (see :class:`Acquisition`).
+            extra_types: additional ``rdf:type`` entries to emit; the
+                ``onli:instrument-based-assessment`` type is always prepended.
+            **fields: schema slot values forwarded to :class:`Acquisition`.
+        """
         all_extra_types = [URIRef(ONLI["instrument-based-assessment"])]
         if extra_types:
             all_extra_types.extend(extra_types)

@@ -47,6 +47,17 @@ class Association(LinkMLBackedNode):
         identifier: Optional[Union[URIRef, str]] = None,
         **fields: Any,
     ) -> None:
+        """Construct an Association sharing *parent*'s graph.
+
+        Args:
+            parent: node (Acquisition/Derivative/Project) whose graph is shared.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix; when given, a named ``niiri:`` identifier
+                is minted instead of the default blank node.
+            identifier: explicit subject URI overriding the default blank node.
+            **fields: schema slot values (``agent``, ``had_role``) forwarded to
+                the generated Pydantic ``Association`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)

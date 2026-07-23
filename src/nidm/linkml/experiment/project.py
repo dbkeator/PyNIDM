@@ -49,6 +49,14 @@ class Project(LinkMLBackedNode):
         attributes: Optional[dict] = None,
         **fields: Any,
     ) -> None:
+        """Construct a Project node and initialize its Python-side child lists.
+
+        Args:
+            attributes: legacy-compat dict of field values; each entry is folded
+                into ``fields`` without overriding an explicit keyword.
+            **fields: schema slot values forwarded to the generated Pydantic
+                ``Project`` class (title, description, license, ...).
+        """
         # Legacy compat: callers that used the old `attributes=` dict
         # had it propagate to the prov-toolbox record.  Map it onto our
         # explicit field set, but let explicit kwargs win.
@@ -114,12 +122,15 @@ class Project(LinkMLBackedNode):
         return True
 
     def get_sessions(self) -> list:
+        """Return a copy of this Project's list of child Session wrappers."""
         return list(self._sessions)
 
     def get_derivatives(self) -> list:
+        """Return a copy of this Project's list of child Derivative wrappers."""
         return list(self._derivatives)
 
     def get_dataelements(self) -> list:
+        """Return a copy of this Project's list of child DataElement wrappers."""
         return list(self._dataelements)
 
 

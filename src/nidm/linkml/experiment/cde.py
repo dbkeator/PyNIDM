@@ -1,3 +1,11 @@
+"""Loads and caches the Common Data Element (CDE) definition graphs.
+
+The FSL, FreeSurfer and ANTs CDE ``.ttl`` files describe the derived-measure
+data elements (labels, units, concepts) that segmentation tools emit but that
+are not embedded in individual NIDM files.  :func:`getCDEs` merges them into a
+single rdflib graph and memoizes the result both in memory (``getCDEs.cache``)
+and as a pickle in the temp dir so repeated queries don't re-parse the files.
+"""
 import hashlib
 from os import environ, path
 import pickle
@@ -8,6 +16,10 @@ from nidm.util import urlretrieve
 
 
 def download_cde_files():
+    """Download the canonical CDE .ttl files into the temp dir.
+
+    :return: path to the directory the files were written to
+    """
     cde_dir = tempfile.gettempdir()
 
     for url in Constants.CDE_FILE_LOCATIONS:
@@ -17,6 +29,16 @@ def download_cde_files():
 
 
 def getCDEs(file_list=None):
+    """Return a merged, cached graph of the Common Data Element definitions.
+
+    Results are memoized on ``getCDEs.cache`` and additionally persisted to a
+    per-file-list pickle in the temp dir.  When *file_list* is None the FSL,
+    FreeSurfer and ANTs CDE files are located via the CDE_DIR env var, a known
+    install path, or downloaded on demand.
+
+    :param file_list: optional explicit list of CDE .ttl files to load
+    :return: rdflib Graph containing all CDE definitions
+    """
     if getCDEs.cache:
         return getCDEs.cache
 

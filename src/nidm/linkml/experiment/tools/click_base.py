@@ -10,4 +10,5 @@ import click
 
 @click.group()
 def cli():
+    """Root ``pynidm`` command group; subcommands attach here via ``@cli.command()``."""
     pass

@@ -1091,6 +1091,7 @@ def bidsmri2project(
 
 
 def _build_arg_parser() -> ArgumentParser:
+    """Construct the argparse parser for the bidsmri2nidm CLI."""
     parser = ArgumentParser(
         description=(
             "Represent a BIDS dataset as a NIDM RDF document.  When -no_concepts "
@@ -1201,6 +1202,16 @@ def _list_subjects(directory) -> List[str]:
 
 
 def main(argv: Optional[list] = None) -> int:
+    """CLI entry point: convert a BIDS dataset to NIDM turtle.
+
+    Two output paths: the default single-file mode writes one NIDM graph
+    for the whole dataset, while ``--per_subject`` emits one
+    ``sub-<id>/nidm.ttl`` per subject (all sharing the same project /
+    dataset UUIDs).  Handles ``-o`` path resolution and ``.bidsignore``
+    registration, then serializes via :func:`_write_nidm_graph`.
+
+    Returns the process exit code (0 on success).
+    """
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
     directory = args.directory

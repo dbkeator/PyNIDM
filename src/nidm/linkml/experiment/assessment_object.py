@@ -42,6 +42,17 @@ class AssessmentObject(AcquisitionObject):
         extra_types: Optional[List] = None,
         **fields: Any,
     ) -> None:
+        """Construct an AssessmentObject typed as an assessment instrument.
+
+        Args:
+            acquisition: parent Acquisition (see :class:`AcquisitionObject`).
+            assessment_type: optional URI/CURIE for a more specific assessment
+                (e.g. ``nidm:PositiveAndNegativeSyndromeScale``), emitted as an
+                additional ``rdf:type``.
+            extra_types: additional ``rdf:type`` entries to emit; the
+                ``onli:assessment-instrument`` type is always prepended.
+            **fields: schema slot values forwarded to :class:`AcquisitionObject`.
+        """
         all_extra_types = [URIRef(ONLI["assessment-instrument"])]
         if assessment_type is not None:
             all_extra_types.append(assessment_type)

@@ -36,6 +36,13 @@ class MRObject(AcquisitionObject):
     """
 
     def __init__(self, acquisition, **fields: Any) -> None:
+        """Construct an MRObject, defaulting the modality to MRI.
+
+        Args:
+            acquisition: parent Acquisition (see :class:`AcquisitionObject`).
+            **fields: schema slot values; ``acquisition_modality`` defaults to
+                ``MagneticResonanceImaging`` unless the caller overrides it.
+        """
         fields.setdefault(
             "acquisition_modality",
             AcquisitionModalityEnum.MagneticResonanceImaging,

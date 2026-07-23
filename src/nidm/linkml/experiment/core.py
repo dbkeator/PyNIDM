@@ -93,6 +93,10 @@ class Core:
         uuid: Optional[str] = None,
         namespaces: Optional[Dict[str, Namespace]] = None,
     ) -> None:
+        """Attach to (or create) a graph and resolve this node's identifier/UUID.
+
+        See the class docstring for the meaning of each parameter.
+        """
         if graph is None:
             self.graph = Graph()
             bind_default_namespaces(self.graph)
@@ -321,9 +325,11 @@ class Core:
         )
 
     def __str__(self) -> str:
+        """Return a human-readable label naming this node's identifier."""
         return f"NIDM-LinkML node {self.identifier}"
 
     def __repr__(self) -> str:
+        """Return an unambiguous ``<ClassName identifier=...>`` representation."""
         return f"<{type(self).__name__} identifier={self.identifier!r}>"
 
 

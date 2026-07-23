@@ -129,6 +129,26 @@ class LinkMLBackedNode(Core):
         extra_types: Optional[list] = None,
         **fields: Any,
     ) -> None:
+        """Build, validate, and emit RDF for a new wrapper node.
+
+        Args:
+            graph: shared ``rdflib.Graph`` to emit into; when ``None`` a fresh
+                graph (with default namespaces bound) is created -- this is how a
+                top-level ``Project`` starts a new document.
+            identifier: explicit subject URI; when ``None`` a ``niiri:<uuid>``
+                URI is minted (see :class:`Core`).
+            uuid: explicit UUID to build the ``niiri:`` identifier from.
+            namespaces: extra prefix -> ``Namespace`` bindings to add.
+            extra_types: additional ``rdf:type`` CURIEs/URIRefs emitted for this
+                instance only (used by specializations, e.g. ``bids:Dataset``).
+            **fields: schema slot values forwarded to the generated Pydantic
+                class for validation; wrapper-valued fields are accepted and
+                coerced to their identifier strings.
+
+        Raises:
+            TypeError: if the subclass did not set ``pydantic_class``.
+            pydantic.ValidationError: if ``fields`` violate the schema.
+        """
         if not hasattr(type(self), "pydantic_class"):
             raise TypeError(
                 f"{type(self).__name__} must set the class attribute "
@@ -183,6 +203,9 @@ class LinkMLBackedNode(Core):
     # ------------------------------------------------------------------
 
     def _emit_type_triples(self) -> None:
+        """Emit one ``rdf:type`` triple per schema-declared type CURIE
+        (``class_uri`` plus ``additional_rdf_types``), then one per
+        per-instance ``extra_types`` entry passed to the constructor."""
         for curie in self._collect_type_curies():
             self.graph.add((self.identifier, RDF.type, self._curie_to_uriref(curie)))
         # Per-instance extra types declared via the ``extra_types``
@@ -223,6 +246,9 @@ class LinkMLBackedNode(Core):
     # ------------------------------------------------------------------
 
     def _emit_field_triples(self) -> None:
+        """Emit one triple per populated, ``slot_uri``-bearing field of the
+        validated Pydantic model. Fields without a ``slot_uri`` (containment
+        slots, handled by subclasses) and ``None`` values are skipped."""
         for field_name, field_info in type(self).pydantic_class.model_fields.items():
             if field_name == "identifier":
                 continue  # the identifier IS the subject URI, not a predicate
@@ -241,6 +267,9 @@ class LinkMLBackedNode(Core):
 
     @staticmethod
     def _slot_uri_for_field(field_info) -> Optional[str]:
+        """Return the ``slot_uri`` (RDF predicate CURIE) recorded in a Pydantic
+        field's ``json_schema_extra['linkml_meta']``, or ``None`` when the field
+        is a containment/structural slot that maps to no predicate."""
         extra = getattr(field_info, "json_schema_extra", None)
         if not isinstance(extra, dict):
             return None
@@ -256,6 +285,9 @@ class LinkMLBackedNode(Core):
         annotation: Any = None,
         field_name: Optional[str] = None,
     ) -> None:
+        """Emit the triple(s) for a single field: expand *slot_uri* to a
+        predicate URIRef and add one triple per value (a multivalued field emits
+        one triple each). RDF objects that resolve to ``None`` are skipped."""
         predicate = self._curie_to_uriref(slot_uri)
         if isinstance(value, (list, tuple)):
             for v in value:

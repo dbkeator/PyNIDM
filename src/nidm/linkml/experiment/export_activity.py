@@ -58,6 +58,17 @@ class ExportActivity(LinkMLBackedNode):
         identifier: Optional[Union[URIRef, str]] = None,
         **fields: Any,
     ) -> None:
+        """Construct an ExportActivity sharing *project*'s graph.
+
+        Args:
+            project: Project whose graph is shared.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            identifier: explicit subject URI overriding the default ``niiri:`` one.
+            **fields: schema slot values (``was_associated_with``, ``used``,
+                ``started_at_time``, ...) forwarded to the generated Pydantic
+                ``ExportActivity`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)

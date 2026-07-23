@@ -63,6 +63,19 @@ class Collection(LinkMLBackedNode):
         extra_types: Optional[List] = None,
         **fields: Any,
     ) -> None:
+        """Construct a Collection sharing *project*'s graph.
+
+        Args:
+            project: Project whose graph is shared.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            identifier: explicit subject URI overriding the default ``niiri:`` one.
+            extra_types: additional ``rdf:type`` CURIEs/URIRefs to emit beyond
+                ``prov:Collection`` (e.g. ``bids:Dataset``,
+                ``nidm:FSStatsCollection``).
+            **fields: schema slot values (``members``, ``bids_version``, ...)
+                forwarded to the generated Pydantic ``Collection`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)

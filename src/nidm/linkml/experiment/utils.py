@@ -2093,6 +2093,7 @@ def _copy_response_options(entry: dict, src: Mapping) -> None:
     aliases into *entry*."""
 
     def _ro() -> dict:
+        """Return (creating if needed) *entry*'s ``responseOptions`` sub-dict."""
         return entry.setdefault("responseOptions", {})
 
     if "responseOptions" in src:

@@ -40,6 +40,16 @@ class Derivative(LinkMLBackedNode):
         uuid: Optional[str] = None,
         **fields: Any,
     ) -> None:
+        """Construct a Derivative, link it to *project*, and register it as a child.
+
+        Args:
+            project: parent Project whose graph is shared and whose identifier
+                becomes this Derivative's ``dct:isPartOf`` target.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            **fields: schema slot values (e.g. ``used``) forwarded to the
+                generated Pydantic ``Derivative`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)
@@ -67,6 +77,7 @@ class Derivative(LinkMLBackedNode):
         return True
 
     def get_derivative_objects(self) -> list:
+        """Return a copy of this Derivative's list of DerivativeObject children."""
         return list(self._derivative_objects)
 
 

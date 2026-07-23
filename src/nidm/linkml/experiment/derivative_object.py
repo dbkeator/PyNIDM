@@ -42,6 +42,16 @@ class DerivativeObject(LinkMLBackedNode):
         uuid: Optional[str] = None,
         **fields: Any,
     ) -> None:
+        """Construct a DerivativeObject and link it to its parent Derivative.
+
+        Args:
+            derivative: parent Derivative whose graph is shared and whose
+                identifier becomes this object's ``prov:wasGeneratedBy`` target.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            **fields: schema slot values forwarded to the generated Pydantic
+                ``DerivativeObject`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)

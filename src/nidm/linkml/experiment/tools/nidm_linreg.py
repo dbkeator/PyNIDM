@@ -345,6 +345,13 @@ def data_aggregation(reporter):  # all data from all the files is collected
 def dataparsing(
     reporter,
 ):  # The data is changed to a format that is usable by the linear regression method
+    """Reshape and encode the aggregated data for regression.
+
+    Flattens the per-file condensed data into one table, warns (and
+    optionally aborts) when there are fewer than 20 data points, and
+    label-encodes categorical columns so the model can consume them.
+    Publishes the cleaned frame as the global ``df_final``.
+    """
     global condensed_data
     condensed_data = []
     for i in range(0, len(file_list)):
@@ -433,6 +440,13 @@ def dataparsing(
 
 
 def linreg(reporter):  # actual linear regression
+    """Fit and report the ordinary-least-squares model.
+
+    Builds the patsy formula from the parsed model string (handling
+    interaction ``*`` terms), fits the design with statsmodels/sklearn,
+    and prints the OLS summary.  Skipped downstream of a contrast run
+    (that path is handled in :func:`contrasting`).
+    """
     print("Model Results: ")
     # printing the corrected model_string
     model_string = []
@@ -499,6 +513,14 @@ def linreg(reporter):  # actual linear regression
 
 
 def contrasting(reporter):
+    """Fit the model under each contrast (dummy) coding scheme.
+
+    When a contrast variable was supplied, refits the OLS model using
+    Treatment, Simple, Sum (deviation), backward-Difference and Helmert
+    coding of the categorical contrast variable, printing each summary
+    so the user can compare level effects under different reference
+    conventions.
+    """
     global c
     global full_model_variable_list
     if c:
@@ -550,22 +572,28 @@ def contrasting(reporter):
 
         # Defining the Simple class
         def _name_levels(prefix, levels):
+            """Format contrast column names as ``[prefix<level>]`` for patsy."""
             return [f"[{prefix}{level}]" for level in levels]
 
         class Simple:
+            """Patsy-compatible "simple" contrast coding of factor levels."""
+
             def _simple_contrast(self, levels):
+                """Build the simple-contrast matrix comparing each level to the reference."""
                 nlevels = len(levels)
                 contr = -1.0 / nlevels * np.ones((nlevels, nlevels - 1))
                 contr[1:][np.diag_indices(nlevels - 1)] = (nlevels - 1.0) / nlevels
                 return contr
 
             def code_with_intercept(self, levels):
+                """Return the simple-coded ContrastMatrix including an intercept column."""
                 c = np.column_stack(
                     (np.ones(len(levels)), self._simple_contrast(levels))
                 )
                 return ContrastMatrix(c, _name_levels("Simp.", levels))
 
             def code_without_intercept(self, levels):
+                """Return the simple-coded ContrastMatrix without an intercept column."""
                 c = self._simple_contrast(levels)
                 return ContrastMatrix(c, _name_levels("Simp.", levels[:-1]))
 
@@ -638,6 +666,13 @@ def contrasting(reporter):
 
 
 def regularizing(reporter):
+    """Fit an L1 (Lasso) or L2 (Ridge) regularized model when requested.
+
+    Sweeps the regularization strength (alpha) from 1 to ``MAX_ALPHA``,
+    picks the alpha with the highest cross-validated score, refits at that
+    alpha, and reports the coefficients and intercept.  Skipped when the
+    user opted to proceed past the low-data warning in :func:`dataparsing`.
+    """
     # does it say L1, and has the user chosen to go ahead with running the code?
     if r in ("L1", "Lasso", "l1", "lasso") and "y" not in answer.lower():
         # Loop to compute the cross-validation scores

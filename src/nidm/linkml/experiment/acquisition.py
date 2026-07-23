@@ -44,6 +44,16 @@ class Acquisition(LinkMLBackedNode):
         uuid: Optional[str] = None,
         **fields: Any,
     ) -> None:
+        """Construct an Acquisition, link it to *session*, and register it.
+
+        Args:
+            session: parent Session whose graph is shared and whose identifier
+                becomes this Acquisition's ``dct:isPartOf`` target.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            **fields: schema slot values forwarded to the generated Pydantic
+                ``Acquisition`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)
@@ -71,6 +81,7 @@ class Acquisition(LinkMLBackedNode):
         return True
 
     def get_acquisition_objects(self) -> list:
+        """Return a copy of this Acquisition's list of AcquisitionObject children."""
         return list(self._acquisition_objects)
 
     def add_qualified_association(self, person, role):

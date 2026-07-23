@@ -1,3 +1,4 @@
+"""``pynidm version`` -- print the installed PyNIDM version."""
 from nidm import __version__
 from nidm.linkml.experiment.tools.click_base import cli
 

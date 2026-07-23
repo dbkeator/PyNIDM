@@ -562,11 +562,13 @@ def match_acquistion_task_run_from_session(
     )
 
     def _first_row(df):
+        """Return (acq_entity, acq_activity) from the first row of *df*, or (None, None)."""
         for _, row in df.iterrows():
             return row.get("acq_entity"), row.get("acq_activity")
         return None, None
 
     def _lookup(session_uri):
+        """Query for the acquisition matching the task/run within *session_uri*."""
         if task and run:
             return _first_row(
                 GetAcquisitionEntityFromSubjectSessionTaskRun(
@@ -943,6 +945,7 @@ def csv2nidm_project(
 
 
 def _build_arg_parser() -> ArgumentParser:
+    """Construct the argparse parser for the csv2nidm CLI."""
     parser = ArgumentParser(
         description=(
             "Load a CSV / TSV file, optionally map its variables to NIDM/InterLex "
@@ -1071,6 +1074,7 @@ def _materialize_derivative_row_freshfile(
     # nidm:Task, nidm:AcquisitionObject) so the derived data can be linked back to
     # the correct acquisition by subject_id + ses + task + run.
     def _nonempty(col: str) -> bool:
+        """True if *col* is present in the row and holds a non-empty, non-NaN value."""
         return col in df_columns and not pd.isna(df_row[col]) and str(df_row[col]) != ""
 
     if _nonempty("ses"):
@@ -1215,6 +1219,16 @@ def csv2nidm_derivative_project(
 
 
 def csv2nidm_main(argv: Optional[list] = None) -> int:
+    """CLI entry point: dispatch to one of the four conversion paths.
+
+    Based on the supplied flags, routes to:
+      * fresh-file derivative (``-derivative`` + ``-out``, no ``-nidm``),
+      * add-derivative-to-existing (``-derivative`` + ``-nidm``),
+      * add-CSV-to-existing (``-nidm``), or
+      * fresh assessment NIDM file (``-out``).
+
+    Returns the process exit code (0 on success).
+    """
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 

@@ -1,3 +1,14 @@
+"""High-level traversal helpers for NIDM-Experiment graphs.
+
+Sits on top of the low-level query/graph helpers in
+:mod:`nidm.linkml.experiment.query` and provides the object-navigation the
+REST API uses: walking projects -> sessions -> acquisitions -> subjects and
+pulling structured activity/data-element records out of the RDF.
+
+Most helpers take a *tuple* of NIDM file paths (not a list) so they can be
+memoized with ``functools.lru_cache``.  ``ValueType`` and ``ActivityData``
+are the namedtuples used to return normalized measurement rows.
+"""
 import collections
 import functools
 from rdflib import URIRef
@@ -55,6 +66,11 @@ def makeValueType(
     project=None,
     source_variable=None,
 ):
+    """Build a ``ValueType`` namedtuple, stringifying every field.
+
+    Convenience constructor used when the individual descriptor values are
+    already known (as opposed to :func:`makeValueTypeFromDataTypeInfo`).
+    """
     return ValueType(
         str(value),
         str(label),
@@ -72,6 +88,15 @@ def makeValueType(
 
 
 def makeValueTypeFromDataTypeInfo(value, data_type_info_tuple):
+    """Build a ``ValueType`` from a measured value plus a data-type-info dict.
+
+    Missing descriptor keys are backfilled with None so the dict returned by
+    :func:`getDataTypeInfo` can be passed straight through.
+
+    :param value: the measured value
+    :param data_type_info_tuple: dict of data element descriptors (may be falsy)
+    :return: populated ValueType namedtuple
+    """
     if not data_type_info_tuple:
         data_type_info_tuple = {}
 
@@ -135,6 +160,7 @@ def simplifyURIWithPrefix(nidm_file_tuples, uri):
 
     @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
     def getNamespaceLookup(nidm_file_tuples):
+        """Return a namespace-URI -> prefix lookup across all supplied files."""
         names = {}
         for f in nidm_file_tuples:
             rdf_graph = OpenGraph(f)
@@ -155,6 +181,11 @@ def simplifyURIWithPrefix(nidm_file_tuples, uri):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getProjects(nidm_file_tuples):
+    """Return the URIs of every nidm:Project across the supplied files.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :return: list of project URIRefs
+    """
     projects = []
 
     for file in nidm_file_tuples:
@@ -168,6 +199,12 @@ def getProjects(nidm_file_tuples):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getSessions(nidm_file_tuples, project_id):
+    """Return the session URIs that are dct:isPartOf the given project.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param project_id: project UUID or full URI
+    :return: list of session URIRefs
+    """
     project_uri = expandID(project_id, Constants.NIIRI)
     sessions = []
 
@@ -184,6 +221,12 @@ def getSessions(nidm_file_tuples, project_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getAcquisitions(nidm_file_tuples, session_id):
+    """Return the acquisition activity URIs that are part of a session.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param session_id: session UUID or full URI
+    :return: list of acquisition URIRefs
+    """
     session_uri = expandID(session_id, Constants.NIIRI)
     acquisitions = []
 
@@ -200,6 +243,15 @@ def getAcquisitions(nidm_file_tuples, session_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getSubject(nidm_file_tuples, acquisition_id):
+    """Return the subject agent linked to an acquisition, or None.
+
+    Follows the acquisition's prov:qualifiedAssociation blank node to the agent
+    holding the SIO:Subject role.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param acquisition_id: acquisition UUID or full URI
+    :return: subject agent URIRef, or None if not found
+    """
     acquisition_uri = expandID(acquisition_id, Constants.NIIRI)
 
     for file in nidm_file_tuples:
@@ -220,6 +272,14 @@ def getSubject(nidm_file_tuples, acquisition_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getSubjects(nidm_file_tuples, project_id):
+    """Return the set of subject agents participating in a project.
+
+    Aggregates subjects across all of the project's sessions and acquisitions.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param project_id: project UUID or full URI
+    :return: set of subject URIRefs
+    """
     subjects = set([])
     project_uri = expandID(project_id, Constants.NIIRI)
 
@@ -234,6 +294,14 @@ def getSubjects(nidm_file_tuples, project_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getSubjectUUIDsfromID(nidm_file_tuples, sub_id):
+    """Return the subject UUIDs whose src_subject_id equals *sub_id*.
+
+    A single study subject ID may resolve to multiple UUIDs across files.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param sub_id: study-assigned subject ID
+    :return: list of matching UUID tails
+    """
     uuids = []
     for file in nidm_file_tuples:
         rdf_graph = OpenGraph(file)
@@ -248,6 +316,12 @@ def getSubjectUUIDsfromID(nidm_file_tuples, sub_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getSubjectIDfromUUID(nidm_file_tuples, subject_uuid):
+    """Return the study subject ID (src_subject_id) for a subject UUID.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param subject_uuid: subject agent URI
+    :return: the src_subject_id value, or None if not found
+    """
     for file in nidm_file_tuples:
         rdf_graph = OpenGraph(file)
         id_generator = rdf_graph.objects(
@@ -260,6 +334,12 @@ def getSubjectIDfromUUID(nidm_file_tuples, subject_uuid):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def normalizeSingleSubjectToUUID(nidm_file_tuples, id):  # noqa: A002
+    """Resolve a subject ID to its first UUID, or return *id* unchanged.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param id: subject ID or UUID
+    :return: the first matching UUID if the id resolves, else the original id
+    """
     if len(getSubjectUUIDsfromID(nidm_file_tuples, id)) > 0:
         return getSubjectUUIDsfromID(nidm_file_tuples, id)[0]
     return id
@@ -267,6 +347,16 @@ def normalizeSingleSubjectToUUID(nidm_file_tuples, id):  # noqa: A002
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getActivities(nidm_file_tuples, subject_id):
+    """Return the set of activities associated with a subject.
+
+    Accepts either a subject UUID or a study subject ID (which is first resolved
+    to its UUID(s)); an activity qualifies if one of its qualifiedAssociation
+    blank nodes names the subject as agent.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param subject_id: subject UUID or study subject ID
+    :return: set of activity URIRefs
+    """
     activities = set([])
 
     # if we were passed in a sub_id rather than a UUID, lookup the associated UUID. (we might get multiple!)
@@ -292,6 +382,12 @@ def getActivities(nidm_file_tuples, subject_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def isAStatCollection(nidm_file_tuples, uri):
+    """Return True if *uri* is any FS/FSL/ANTS/Derivative stats collection.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param uri: candidate URI
+    :return: bool
+    """
     for file in nidm_file_tuples:
         rdf_graph = OpenGraph(file)
         if (
@@ -321,6 +417,18 @@ def isAStatCollection(nidm_file_tuples, uri):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def getActivityData(nidm_file_tuples, acquisition_id):
+    """Return the normalized data records generated by an acquisition.
+
+    Everything wasGeneratedBy the acquisition is classified: AcquisitionObjects
+    yield "instrument" category rows, stats collections yield "derivative"
+    category rows.  Each predicate is resolved through :func:`getDataTypeInfo`
+    when possible so results carry full DataElement metadata; otherwise the row
+    falls back to a simplified/URI-tail label.
+
+    :param nidm_file_tuples: tuple of NIDM file paths
+    :param acquisition_id: acquisition UUID or full URI
+    :return: an ActivityData namedtuple (category, uuid, list of ValueTypes)
+    """
     acquisition_uri = expandID(acquisition_id, Constants.NIIRI)
     result = []
     category = None
@@ -387,6 +495,16 @@ def getActivityData(nidm_file_tuples, acquisition_id):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def GetProjectAttributes(nidm_files_tuple, project_id):
+    """Return a project's direct attributes plus its aggregated scan attributes.
+
+    Collects the project's own predicate/object pairs, then drills into every
+    acquisition object to gather the distinct AcquisitionModality,
+    ImageContrastType, ImageUsageType and Task values used across the project.
+
+    :param nidm_files_tuple: tuple of NIDM file paths
+    :param project_id: project UUID or full URI
+    :return: dict of project attributes (scan-attribute keys are lists)
+    """
     result = {
         ACQUISITION_MODALITY: set([]),
         IMAGE_CONTRAST_TYPE: set([]),
@@ -434,6 +552,11 @@ def GetProjectAttributes(nidm_files_tuple, project_id):
 
 @functools.lru_cache(maxsize=BIG_CACHE_SIZE)
 def GetAllPredicates(nidm_files_tuple):
+    """Return the set of every predicate URI used across the supplied files.
+
+    :param nidm_files_tuple: tuple of NIDM file paths
+    :return: set of predicate URIRefs
+    """
     pred_set = set()
     for file in nidm_files_tuple:
         rdf_graph = OpenGraph(file)
@@ -445,6 +568,16 @@ def GetAllPredicates(nidm_files_tuple):
 
 @functools.lru_cache(maxsize=QUERY_CACHE_SIZE)
 def GetDataelements(nidm_files_tuple):
+    """Return all data elements (including CDEs) referenced by the files.
+
+    Gathers nidm:DataElement and nidm:PersonalDataElement subjects directly,
+    then adds any common data elements whose URIs appear only as predicates in
+    the files by matching them against the loaded CDE graph.
+
+    :param nidm_files_tuple: tuple of NIDM file paths
+    :return: dict with parallel uuid/label/data_type_info lists under
+        the "data_elements" key
+    """
     result = {"data_elements": {"uuid": [], "label": [], "data_type_info": []}}
     found_uris = set()
 
@@ -495,6 +628,18 @@ def GetDataelements(nidm_files_tuple):
 
 
 def GetDataelementDetails(nidm_files_tuple, dataelement):
+    """Return full details for a single data element, incl. its projects.
+
+    Matches *dataelement* against a data element's label, short name, or URI.
+    For elements found in the main graph, walks the AcquisitionObject ->
+    Acquisition -> Session -> Project chain to record which projects use it;
+    for common data elements, records "Common Data Element" plus any files that
+    reference the predicate.
+
+    :param nidm_files_tuple: tuple of NIDM file paths
+    :param dataelement: label, short name, or URI of the data element
+    :return: dict of the element's data-type info plus an "inProjects" set
+    """
     result = {}
 
     for file in nidm_files_tuple:

@@ -34,10 +34,12 @@ _CDE_FILENAMES = ("ants_cde.ttl", "fs_cde.ttl", "fsl_cde.ttl")
 
 
 def _is_url(token: str) -> bool:
+    """True if *token* is an http(s) URL (passed through to rdflib untouched)."""
     return token.startswith("http://") or token.startswith("https://")
 
 
 def _has_glob_magic(token: str) -> bool:
+    """True if *token* contains shell-glob wildcard characters (``*?[``)."""
     return any(ch in token for ch in "*?[")
 
 
@@ -88,6 +90,7 @@ def expand_nidm_file_list(
     out: list[str] = []
 
     def _add(item: str) -> None:
+        """Append *item* to the output list unless it was already seen (de-dup)."""
         if item not in _seen:
             _seen.add(item)
             out.append(item)

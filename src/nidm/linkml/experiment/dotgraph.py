@@ -46,6 +46,7 @@ _NODE_STYLE = {
 
 
 def _localname(term) -> str:
+    """Return the local name of an RDF *term* (the part after the last ``#``/``/``)."""
     s = str(term)
     for sep in ("#", "/"):
         if sep in s:
@@ -100,6 +101,7 @@ def build_nidm_dotgraph(graph: Graph) -> "pydot.Dot":
     _ids: dict = {}
 
     def node_id(term) -> str:
+        """Return a stable ``n<N>`` pydot node id for *term*, minting one on first use."""
         if term not in _ids:
             _ids[term] = f"n{len(_ids)}"
         return _ids[term]
@@ -120,6 +122,7 @@ def build_nidm_dotgraph(graph: Graph) -> "pydot.Dot":
     added_edges: set = set()
 
     def add_edge(src, dst, label: str, **kwargs) -> None:
+        """Add a labeled edge *src* -> *dst* to the pydot graph, de-duplicating."""
         key = (src, dst, label)
         if key in added_edges:
             return

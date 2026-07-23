@@ -7,6 +7,12 @@ from nidm.linkml.experiment.utils import read_nidm
 
 
 def main():
+    """argparse entry point for the standalone NIDM-Experiment utilities.
+
+    Exposes three subcommands: ``concat`` (merge NIDM files into one turtle
+    output), ``visualize`` (render each file to a PDF DotGraph), and
+    ``jsonld`` (re-serialize each file as JSON-LD next to the original).
+    """
     parser = ArgumentParser(
         description="This program contains various NIDM-Experiment utilities"
     )

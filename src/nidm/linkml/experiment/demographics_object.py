@@ -36,6 +36,14 @@ class DemographicsObject(AcquisitionObject):
         extra_types: Optional[List] = None,
         **fields: Any,
     ) -> None:
+        """Construct a DemographicsObject and mark it as demographics-specific.
+
+        Args:
+            acquisition: parent Acquisition (see :class:`AcquisitionObject`).
+            extra_types: additional ``rdf:type`` entries to emit; the
+                ``onli:assessment-instrument`` type is always prepended.
+            **fields: schema slot values forwarded to :class:`AcquisitionObject`.
+        """
         all_extra_types = [URIRef(ONLI["assessment-instrument"])]
         if extra_types:
             all_extra_types.extend(extra_types)

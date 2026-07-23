@@ -59,6 +59,21 @@ class DataElement(LinkMLBackedNode):
         identifier: Optional[Union[URIRef, str]] = None,
         **fields: Any,
     ) -> None:
+        """Construct a DataElement sharing *project*'s graph and register it.
+
+        Unlike Session/Acquisition this emits no ``dct:isPartOf`` triple -- a
+        DataElement is a top-level subject, contained by the Project only at the
+        Python API level.
+
+        Args:
+            project: parent Project whose graph is shared.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            identifier: explicit subject URI, e.g. a pipeline-namespaced URIRef,
+                overriding the default ``niiri:`` identifier.
+            **fields: schema slot values (label, description, value_type, ...)
+                forwarded to the generated Pydantic ``DataElement`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)

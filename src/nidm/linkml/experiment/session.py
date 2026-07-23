@@ -45,6 +45,16 @@ class Session(LinkMLBackedNode):
         uuid: Optional[str] = None,
         **fields: Any,
     ) -> None:
+        """Construct a Session, link it to *project*, and register it as a child.
+
+        Args:
+            project: parent Project whose graph is shared and whose identifier
+                becomes this Session's ``dct:isPartOf`` target.
+            attributes: legacy-compat dict of field values folded into ``fields``.
+            uuid: explicit UUID suffix for the minted ``niiri:`` identifier.
+            **fields: schema slot values (e.g. ``session_number``) forwarded to
+                the generated Pydantic ``Session`` class.
+        """
         if attributes:
             for k, v in attributes.items():
                 fields.setdefault(k, v)
@@ -90,6 +100,7 @@ class Session(LinkMLBackedNode):
         return True
 
     def get_acquisitions(self) -> list:
+        """Return a copy of this Session's list of child Acquisition wrappers."""
         return list(self._acquisitions)
 
     def acquisition_exist(self, uuid: str) -> bool:

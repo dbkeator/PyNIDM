@@ -1,3 +1,12 @@
+"""REST-style query layer for NIDM files.
+
+Defines :class:`RestParser`, which maps URI-style routes (e.g.
+``/projects``, ``/projects/<uuid>/subjects``, ``/subjects/<uuid>``) onto the
+SPARQL query/navigation helpers in :mod:`nidm.linkml.experiment.query` and
+:mod:`nidm.linkml.experiment.navigate`, and renders the results in one of
+several output formats (CLI table, JSON, or plain Python objects). It backs
+the ``pynidm query`` URI routes.
+"""
 from copy import deepcopy
 import functools
 import json
@@ -26,16 +35,36 @@ def convertListtoDict(lst):
 
 
 class RestParser:
+    """Parse and dispatch NIDM REST-style URI commands against NIDM files.
+
+    A single :meth:`run` call takes a list of NIDM files plus a REST-style
+    command string (e.g. ``"/projects/<id>/subjects"``) and returns the
+    result rendered in one of three output formats selected by
+    ``output_format``:
+
+    * ``OBJECT_FORMAT`` (0) -- return the raw Python object.
+    * ``JSON_FORMAT`` (1) -- return a JSON string.
+    * ``CLI_FORMAT`` (2) -- return a human-readable tabulated string.
+
+    :meth:`route` maps the parsed URI path to one of the ``*``-route
+    methods (``projects``, ``subjectSummary``, ...); each route method
+    queries via :mod:`navigate` / :mod:`query` and hands its result to a
+    matching ``*Format`` method for rendering.
+    """
+
+    # Output-format selector constants; compared against ``self.output_format``.
     OBJECT_FORMAT = 0
     JSON_FORMAT = 1
     CLI_FORMAT = 2
 
     def __init__(self, verbosity_level=0, output_format=0):
+        """Store the logging verbosity and desired output format."""
         self.verbosity_level = verbosity_level
         self.output_format = output_format
         self.restLog(f"Setting output format {self.output_format}", 4)
 
     def setOutputFormat(self, output_format):
+        """Change the output format used by subsequent :meth:`run` calls."""
         self.output_format = output_format
         self.restLog(f"Setting output format {self.output_format}", 4)
 
@@ -44,7 +73,16 @@ class RestParser:
     #####################
 
     def arrayFormat(self, result, headers):
+        """Render a list *result* per the active output format.
+
+        Returns JSON text for JSON_FORMAT; for CLI_FORMAT returns a
+        one-column table (auto-labeling the column ``"UUID"`` when every
+        element is a UUID string and no header was supplied); otherwise
+        returns *result* unchanged.
+        """
+
         def allUUIDs(arr):
+            """Return True if every element of *arr* is a UUID-shaped string."""
             uuid_only = True
             for s in arr:
                 if not isinstance(s, str) or not re.match(
@@ -66,6 +104,13 @@ class RestParser:
         return result
 
     def dictFormat(self, result, headers=None):
+        """Render a dict *result* per the active output format.
+
+        For CLI_FORMAT, scalar/string values become key/value rows while
+        nested lists and dicts are rendered as separate "appendix" tables
+        joined after the main table; other formats defer to
+        :meth:`format`.
+        """
         if headers is None:
             headers = [""]
         if self.output_format == self.CLI_FORMAT:
@@ -109,7 +154,14 @@ class RestParser:
             return self.format(result)
 
     def objectTableFormat(self, result, headers=None):
+        """Flatten a nested dict *result* into a single tabulated table.
+
+        Each leaf value becomes a row whose leading columns are the chain
+        of dict keys that reach it (recursing up to a fixed max depth).
+        """
+
         def flatten(obj, maxDepth=10, table=None, rowInProgress=None, depth=0):
+            """Recursively collect leaf rows keyed by their nesting path."""
             if table is None:
                 table = []
             if rowInProgress is None:
@@ -135,6 +187,11 @@ class RestParser:
         return tabulate(flatten(result), headers=headers)
 
     def activityDataTableFormat(self, data):
+        """Tabulate a list of ActivityData objects as measurement rows.
+
+        Emits one row per datum (uuid, measureOf, label, value, hasUnit)
+        across every instrument/derivative activity in *data*.
+        """
         headers = ["uuid", "measure", "label", "value", "unit"]
         rows = []
         for inst_or_deriv in data:
@@ -150,6 +207,14 @@ class RestParser:
     #####################
 
     def projectSummaryFormat(self, result):
+        """Render a project-summary dict per the active output format.
+
+        For CLI_FORMAT, sorts the subject and data-element sub-tables and
+        lays out project attributes, subject info, and data elements as
+        stacked tables; when the caller requested ``fields``, returns just
+        the field-values table instead. Non-CLI formats return the raw
+        (or field-values) structure via :meth:`format`.
+        """
         if self.output_format == self.CLI_FORMAT:
             ### added by DBK to sort things
             if "subjects" in result:
@@ -221,6 +286,13 @@ class RestParser:
                 return self.format(result)
 
     def formatDerivatives(self, derivative):
+        """Render a derivatives dict per the active output format.
+
+        For CLI_FORMAT, emits one row per measurement (uuid, measurement
+        URI, label, value+units, datum type, isAbout), skipping the NIDM
+        structural predicates (``prov:wasGeneratedBy``, ``rdf:type``);
+        other formats defer to :meth:`format`.
+        """
         self.restLog(f"formatting derivatives in format {self.output_format}", 5)
         if self.output_format == self.CLI_FORMAT:
             table = []
@@ -258,6 +330,12 @@ class RestParser:
             return self.format(derivative)
 
     def dataElementsFormat(self, de_data):
+        """Render the data-elements listing per the active output format.
+
+        For CLI_FORMAT, builds one row per data element (label,
+        source_variable, hasUnit, description, dataElement, isAbout)
+        sorted by label; other formats defer to :meth:`format`.
+        """
         if self.output_format == self.CLI_FORMAT:
             table = []
             headers = [
@@ -287,9 +365,16 @@ class RestParser:
             return self.format(de_data)
 
     def dataElementDetailsFormat(self, de_data):
+        """Render a single data element's details via :meth:`format`."""
         return self.format(de_data)
 
     def subjectFormat(self, subject_data):
+        """Render the subjects listing per the active output format.
+
+        For CLI_FORMAT, tabulates subject UUID / source ID pairs and, when
+        ``fields`` were requested, appends a per-subject/activity field
+        table; other formats defer to :meth:`format`.
+        """
         if self.output_format == self.CLI_FORMAT:
             subjects = []
             for subject in subject_data["subject"]:
@@ -312,6 +397,13 @@ class RestParser:
             return self.format(subject_data)
 
     def subjectSummaryFormat(self, result):
+        """Render a subject-summary dict per the active output format.
+
+        For CLI_FORMAT, lays out scalar attributes plus separate tables for
+        derivatives and instruments; the ``instruments``/``derivatives``/
+        ``activity`` keys are summarized as comma-joined values in the top
+        table. Other formats defer to :meth:`format`.
+        """
         if self.output_format == self.CLI_FORMAT:
             special_keys = ["instruments", "derivatives", "activity"]
             toptable = []
@@ -337,6 +429,13 @@ class RestParser:
             return self.format(result)
 
     def subjectSummaryFormat_v2(self, result):
+        """Render a subject-summary dict using the ActivityData layout.
+
+        Like :meth:`subjectSummaryFormat`, but renders the instruments and
+        derivatives via :meth:`activityDataTableFormat` (the newer
+        ActivityData-based representation). Non-CLI formats defer to
+        :meth:`format`.
+        """
         if self.output_format == self.CLI_FORMAT:
             special_keys = ["instruments", "derivatives", "activity"]
             toptable = []
@@ -386,10 +485,16 @@ class RestParser:
     #####################
 
     def dataelements(self):
+        """Route ``/dataelements`` -> list every data element across the files."""
         result = Navigate.GetDataelements(self.nidm_files)
         return self.dataElementsFormat(result)
 
     def dataelementsSummary(self):
+        """Route ``/dataelements/<id>`` -> details for one data element.
+
+        Parses the element id from the command path and returns its full
+        detail structure.
+        """
         path = (urlparse(self.command)).path
         match = re.match(r"^/?dataelements/([^/\?]+)", path)
         dataelement = parse.unquote(str(match.group(1)))
@@ -398,6 +503,13 @@ class RestParser:
         return self.dataElementDetailsFormat(result)
 
     def projects(self):
+        """Route ``/projects`` -> list all project UUIDs.
+
+        When the query includes ``fields``, drills into each project's
+        subjects/activities to collect matching field values and returns a
+        project-summary table instead; raises ``ValueError`` if none of the
+        requested fields are found.
+        """
         result = []
         field_values = []
         self.restLog("Returning all projects", 2)
@@ -523,6 +635,13 @@ class RestParser:
             project[str(Constants.NIDM_HANDEDNESS)] = list(hands)
 
     def projectStats(self):
+        """Route ``/statistics/projects/<id>`` -> summary stats for a project.
+
+        Builds the project's expanded metadata (age/gender/handedness/
+        subject count), strips namespace prefixes from the keys for
+        readability, and appends per-field statistics (via
+        :meth:`addFieldStats`) for any ``fields`` requested in the query.
+        """
         result = {}
         subjects = None
         path = (urlparse(self.command)).path
@@ -571,6 +690,10 @@ class RestParser:
     STAT_TYPE_DERIVATIVES = 2
 
     def getStatType(self, name):
+        """Map a field prefix (``instruments``/``derivatives``) to its STAT_TYPE.
+
+        Returns ``STAT_TYPE_OTHER`` for anything unrecognized.
+        """
         lookup = {
             "instruments": self.STAT_TYPE_INSTRUMENTS,
             "derivatives": self.STAT_TYPE_DERIVATIVES,
@@ -581,6 +704,7 @@ class RestParser:
 
     @staticmethod
     def getTailOfURI(uri):
+        """Return the local name of *uri* (the part after the last ``#`` or ``/``)."""
         if "#" in uri:
             return uri[uri.rfind("#") + 1 :]
         else:
@@ -633,6 +757,12 @@ class RestParser:
         }
 
     def projectSummary(self):
+        """Route ``/projects/<id>`` -> attributes, subjects, and data elements.
+
+        When the query includes ``fields``, also collects each subject's
+        matching field values into ``result["field_values"]`` (raising
+        ``ValueError`` if none match) before rendering.
+        """
         match = re.match(r"^/?projects/([^/]+)$", self.command)
         pid = parse.unquote(str(match.group(1)))
         self.restLog(f"Returning project {pid} summary", 2)
@@ -678,6 +808,10 @@ class RestParser:
         return self.projectSummaryFormat(result)
 
     def subjectsList(self):
+        """Route ``/projects/<id>/subjects`` -> UUIDs + source IDs for a project.
+
+        Only includes subjects that pass the current query ``filter``.
+        """
         match = re.match(r"^/?projects/([^/]+)/subjects/?$", self.command)
         project = match.group((1))
         self.restLog(
@@ -702,6 +836,11 @@ class RestParser:
         return self.format(result)
 
     def projectSubjectSummary(self):
+        """Route ``/projects/<id>/subjects/<sid>`` -> one subject's details.
+
+        Normalizes the subject id to a UUID and returns the participant
+        detail summary.
+        """
         match = re.match(r"^/?projects/([^/]+)/subjects/([^/]+)/?$", self.command)
         subject = Navigate.normalizeSingleSubjectToUUID(self.nidm_files, match.group(2))
         self.restLog(f"Returning info about subject {match[2]}", 2)
@@ -750,6 +889,12 @@ class RestParser:
         return result
 
     def subjects(self):
+        """Route ``/subjects`` -> every subject across all projects.
+
+        Returns UUID/source-ID pairs and, when ``fields`` were requested,
+        a per-subject map of matching field data (via
+        :meth:`getFieldInfoForSubject`).
+        """
         self.restLog("Returning info about subjects", 2)
         projects = Navigate.getProjects(self.nidm_files)
         result = {"subject": []}
@@ -773,6 +918,12 @@ class RestParser:
         return self.subjectFormat(result)
 
     def subjectSummary(self):
+        """Route ``/subjects/<sid>`` -> one subject's instruments + derivatives.
+
+        Accepts either a UUID or a source subject id (resolved to UUID),
+        then partitions the subject's activities into instruments and
+        derivatives for the v2 summary rendering.
+        """
         match = re.match(r"^/?subjects/([^/]+)/?$", self.command)
         self.restLog(f"Returning info about subject {match[1]}", 2)
         sid = match.group(1)
@@ -804,6 +955,10 @@ class RestParser:
         )
 
     def instrumentsList(self):
+        """Route ``/projects/<id>/subjects/<sid>/instruments`` -> instrument UUIDs.
+
+        Lists the instrument keys of the subject's instrument data.
+        """
         result = []
         match = re.match(
             r"^/?projects/([^/]+)/subjects/([^/]+)/instruments/?$", self.command
@@ -818,6 +973,7 @@ class RestParser:
         return self.format(result)
 
     def instrumentSummary(self):
+        """Route ``.../instruments/<iid>`` -> one instrument's category/value data."""
         match = re.match(
             r"^/?projects/([^/]+)/subjects/([^/]+)/instruments/([^/]+)$", self.command
         )
@@ -832,6 +988,7 @@ class RestParser:
         return self.format(instruments[match.group(3)], headers=["Category", "Value"])
 
     def derivativesList(self):
+        """Route ``/projects/<id>/subjects/<sid>/derivatives`` -> derivative UUIDs."""
         result = []
         match = re.match(r"^/?projects/([^/]+)/subjects/([^/]+)", self.command)
         self.restLog(f"Returning derivatives in subject {match[2]}", 2)
@@ -844,6 +1001,7 @@ class RestParser:
         return self.format(result)
 
     def derivativeSummary(self):
+        """Route ``.../derivatives/<uri>`` -> one derivative's measurement data."""
         match = re.match(
             r"^/?projects/([^/]+)/subjects/([^/]+)/derivatives/([^/]+)", self.command
         )
@@ -861,6 +1019,14 @@ class RestParser:
         return self.formatDerivatives(single_derivative)
 
     def run(self, nidm_files, command):
+        """Entry point: parse *command* against *nidm_files* and dispatch it.
+
+        Stores the files, splits the REST-style *command* into its path
+        (``self.command``) and query string (``self.query``), normalizes the
+        ``filter`` and ``fields`` query params, then dispatches via
+        :meth:`route`. A ``ValueError`` (e.g. an unknown field term) is
+        caught and returned as a formatted error object.
+        """
         try:
             self.restLog("parsing command " + command, 1)
             self.restLog("Files to read:" + str(nidm_files), 1)
@@ -892,6 +1058,13 @@ class RestParser:
             )
 
     def route(self):
+        """Match ``self.command``'s path to a route method and invoke it.
+
+        Tries each URI pattern in order (most-specific patterns are
+        distinguished by their regexes) and returns that route method's
+        rendered result; returns an ``{"error": ...}`` object when no
+        pattern matches.
+        """
         if re.match(r"^/?dataelements/?$", self.command):
             return self.dataelements()
 
@@ -940,10 +1113,17 @@ class RestParser:
         return {"error": "No match for supplied URI"}
 
     def restLog(self, message, verbosity_of_message):
+        """Print *message* only if its verbosity is within the configured level."""
         if verbosity_of_message <= self.verbosity_level:
             print(message)
 
     def format(self, result, headers=None):
+        """Render *result* per the active output format.
+
+        Returns JSON text for JSON_FORMAT; for CLI_FORMAT dispatches to
+        :meth:`dictFormat` / :meth:`arrayFormat` (or ``str``) based on the
+        result type; otherwise returns *result* unchanged (OBJECT_FORMAT).
+        """
         if headers is None:
             headers = [""]
         if self.output_format == RestParser.JSON_FORMAT:

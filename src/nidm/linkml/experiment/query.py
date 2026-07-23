@@ -200,6 +200,13 @@ def GetProjectLocation(nidm_file_list, project_uuid, output_file=None):  # noqa:
 
 
 def testprojectmeta(nidm_file_list):
+    """Return a JSON string of every predicate/object pair for each Project.
+
+    :param nidm_file_list: List of one or more NIDM files to query
+    :return: JSON string keyed by project UUID, each mapping predicate -> object
+    """
+    # Grab all (?p ?o) statements for every nidm:Project subject; the result is
+    # folded into a nested {uuid: {predicate: object}} dict below.
     query = """
          prefix nidm: <http://purl.org/nidash/nidm#>
          prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -234,6 +241,10 @@ def GetParticipantSessionsMetadata(nidm_file_list, subject_id):
 
     :return: dataframe of each session object linked to subject_id and all metadata in ?p ?o columns
     """
+    # Sessions are joined to the participant indirectly: an acquisition activity
+    # (dct:isPartOf the session) carries a qualifiedAssociation whose agent has
+    # the requested ndar:src_subject_id.  Only sessions reachable through that
+    # subject chain are returned, along with all their metadata (?p ?o).
     query = f"""
 
             prefix nidm: <http://purl.org/nidash/nidm#>
@@ -566,6 +577,14 @@ def GetAcquisitionEntityMetadataFromUUID(nidm_file_list, entity_uuid):
 
 
 def GetProjectSessionsMetadata(nidm_file_list, project_uuid):
+    """Return a JSON string of all session metadata for a given project.
+
+    :param nidm_file_list: List of one or more NIDM files to query
+    :param project_uuid: UUID of the project whose sessions to collect
+    :return: JSON string nested as {project_uuid: {session_uuid: {predicate: object}}}
+    """
+    # Select every session that is dct:isPartOf the target project plus all of
+    # its (?p ?o) metadata; folded into the nested project/session dict below.
     query = f"""
 
         prefix nidm: <http://purl.org/nidash/nidm#>
@@ -628,6 +647,10 @@ def GetProjectInstruments(nidm_file_list, project_id):
     :param project_id: identifier of project you'd like to search for unique instruments
     :return: Dataframe of instruments and project titles
     """
+    # Each assessment-instrument entity is walked back to its project via the
+    # property path wasGeneratedBy/isPartOf/isPartOf (entity -> acquisition ->
+    # session -> project).  The FILTER drops the generic prov:Entity /
+    # AcquisitionObject rdf:types and restricts to the requested project_id.
     query = f"""
         PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX sio: <http://semanticscience.org/ontology/sio.owl#>
@@ -699,6 +722,9 @@ def GetParticipantIDs(nidm_file_list, output_file=None):
     :return: list of Constants.NIDM_PARTICIPANT UUIDs and Constants.NIDM_SUBJECTID
     """
 
+    # Participants are reached through the reified association: an activity's
+    # prov:qualifiedAssociation blank node with hadRole PARTICIPANT names the
+    # subject agent (?uuid), whose src_subject_id gives the study-assigned ?ID.
     query = f"""
 
         PREFIX prov:<http://www.w3.org/ns/prov#>
@@ -831,6 +857,11 @@ def GetParticipantDetails(nidm_file_list, project_id, participant_id, output_fil
 
 
 def GetMergedGraph(nidm_file_list):
+    """Parse and union every file in *nidm_file_list* into one rdflib Graph.
+
+    :param nidm_file_list: list of NIDM file paths
+    :return: a single merged rdflib Graph
+    """
     rdf_graph = Graph()
     for f in nidm_file_list:
         rdf_graph.parse(f, format=util.guess_format(f))
@@ -838,6 +869,15 @@ def GetMergedGraph(nidm_file_list):
 
 
 def GetNameForDataElement(graph, uri):
+    """Return the most human-friendly name for a data element URI.
+
+    Scans the triples of *uri* and prefers, in order, its source_variable,
+    then rdfs:label, then isAbout, falling back to the URI tail.
+
+    :param graph: rdflib Graph containing the data element
+    :param uri: URIRef of the data element
+    :return: best available name string
+    """
     label = isAbout = source_variable = None
 
     for _, predicate, value in graph.triples((uri, None, None)):
@@ -852,6 +892,11 @@ def GetNameForDataElement(graph, uri):
 
 
 def GetParticipantInstrumentData(nidm_file_list, project_id, participant_id):
+    """Return instrument (assessment) data for a participant.
+
+    Thin wrapper that converts *nidm_file_list* to a hashable tuple and
+    delegates to the lru_cached :func:`GetParticipantInstrumentDataCached`.
+    """
     return GetParticipantInstrumentDataCached(
         tuple(nidm_file_list), project_id, participant_id
     )
@@ -915,6 +960,11 @@ def GetParticipantInstrumentDataCached(
 def GetParticipantUUIDsForProject(
     nidm_file_list: tuple, project_id, filter=None, output_file=None  # noqa: A002
 ):
+    """Return participant UUIDs/subject IDs for a project (optionally filtered).
+
+    Thin wrapper that converts *nidm_file_list* to a hashable tuple and
+    delegates to the lru_cached :func:`GetParticipantUUIDsForProjectCached`.
+    """
     return GetParticipantUUIDsForProjectCached(
         tuple(nidm_file_list), project_id, filter, output_file
     )
@@ -1023,6 +1073,15 @@ def expandUUID(partial_uuid):
 
 
 def getProjectAcquisitionObjects(nidm_file_list, project_id):
+    """Return all AcquisitionObject entities belonging to a project.
+
+    Walks the project -> session -> acquisition -> acquisition-object chain
+    with plain triple matching (no SPARQL) across every supplied file.
+
+    :param nidm_file_list: list of NIDM file paths
+    :param project_id: project UUID (with or without the NIIRI prefix)
+    :return: list of AcquisitionObject URIRefs
+    """
     acq_objects = []
     isa = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
     project_uuid = expandUUID(project_id)
@@ -1110,6 +1169,17 @@ def GetDatatypeSynonyms(nidm_file_list, project_id, datatype):
 
 
 def GetProjectDataElements(nidm_file_list, project_id):
+    """Return the data elements (measures) defined for a project.
+
+    Collects three kinds of data elements: direct nidm:DataElement subjects,
+    their sub-classes (FreeSurfer/FSL/ANTs elements), and common data elements
+    referenced only as predicates on FSStatsCollection / DerivativeCollection
+    stats nodes.
+
+    :param nidm_file_list: list of NIDM file paths
+    :param project_id: project UUID (with or without the NIIRI prefix)
+    :return: dict with parallel "uuid", "label" and "data_type_info" lists
+    """
     ### added by DBK...changing to dictionary to support labels along with uuids
     # result = []
     result = {}
@@ -1200,6 +1270,15 @@ def GetProjectDataElements(nidm_file_list, project_id):
 
 # in case someone passes in a filter subject with a full http or https URI, strip it back to just the bit after the namespace
 def splitSubject(subject):
+    """Split a dotted filter subject into its pieces, stripping any full URI.
+
+    e.g. ``instruments.AGE_AT_SCAN`` -> ``["instruments", "AGE_AT_SCAN"]``.
+    If a full http(s) URI is embedded, it is first reduced to its URI tail so
+    the dot-split isn't confused by slashes in the namespace.
+
+    :param subject: filter subject string
+    :return: list of dot-separated pieces
+    """
     if subject.find("http") > -1:
         matches = re.match(r".*(https?://[^/]+[^\. ]+)", subject)
         URI = matches.group(1)
@@ -1221,6 +1300,11 @@ def URITail(URI):
 
 
 def trimWellKnownURIPrefix(uri):
+    """Strip common NIDM/PROV/NIDASH namespace prefixes off a URI string.
+
+    :param uri: URI (or arbitrary string) to shorten
+    :return: the string with any well-known prefix removed
+    """
     trimmed = uri
     for p in [
         "http://purl.org/nidash/nidm#",
@@ -1329,6 +1413,13 @@ def CheckSubjectMatchesFilter(
 
 
 def filterCompare(left, op, right):
+    """Apply a single filter comparison operator to two values.
+
+    :param left: left-hand value (string; coerced to float for lt/gt)
+    :param op: one of "eq", "lt", "gt"
+    :param right: right-hand value
+    :return: bool result, or None if the comparison could not be made
+    """
     try:
         if op == "eq":
             return left == right
@@ -1384,6 +1475,15 @@ def GetProjectsMetadata(nidm_file_list):
 
 
 def GetDataElements(nidm_file_list):
+    """Return all data elements and their descriptive properties.
+
+    :param nidm_file_list: comma-separated string of NIDM file paths
+    :return: dataframe of data element metadata (label, description, concept,
+        source variable, and optional unit/min/max/valueType/levels)
+    """
+    # Match every subject that is (a sub-class of) nidm:DataElement and pull its
+    # required descriptors, with the value-range descriptors left OPTIONAL so an
+    # element missing e.g. a unit still appears in the results.
     query = """
         prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 prefix nidm: <http://purl.org/nidash/nidm#>
@@ -1413,6 +1513,15 @@ select distinct ?measure_uuid ?label ?description ?concept ?source_variable ?uni
 
 
 def GetBrainVolumeDataElements(nidm_file_list):
+    """Return the data elements describing brain-volume measures.
+
+    :param nidm_file_list: comma-separated string of NIDM file paths
+    :return: dataframe of volume data elements (software tool, labels, laterality)
+    """
+    # Find measures generated by a neuroimaging tool activity whose element is a
+    # FSL, FreeSurfer, or ANTs DataElement (the three UNION branches) that
+    # measures volume (ilx_0112559) with datum type ilx_0738276.  isAbout and
+    # laterality are OPTIONAL.  ?element_id is later trimmed to its URI tail.
     query = """
         prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -1464,6 +1573,14 @@ def GetBrainVolumeDataElements(nidm_file_list):
 
 
 def GetBrainVolumes(nidm_file_list):
+    """Return per-subject brain-volume measurement values.
+
+    :param nidm_file_list: comma-separated string of NIDM file paths
+    :return: dataframe of subject ID, tool, labels, laterality and volume value
+    """
+    # Join each measured volume back to its subject (ndar:src_subject_id) and to
+    # its DataElement definition (volume measureOf ilx_0112559, datumType
+    # ilx_0738276) so values and their metadata come out together.
     query = """
         # This query simply returns the brain volume data without dependencies on other demographics/assessment measures.
 
@@ -1498,6 +1615,13 @@ def GetBrainVolumes(nidm_file_list):
 
 
 def GetBrainThickness(nidm_file_list):
+    """Return per-subject cortical-thickness measurement values.
+
+    :param nidm_file_list: comma-separated string of NIDM file paths
+    :return: dataframe of subject ID, tool, labels, laterality and thickness value
+    """
+    # Same subject/DataElement join as GetBrainVolumes but selecting the
+    # thickness measure (measureOf ilx_0111689).
     query = """
         # This query simply returns the brain thickness data without dependencies on other demographics/assessment measures.
 
@@ -1531,6 +1655,13 @@ def GetBrainThickness(nidm_file_list):
 
 
 def GetBrainSurfaceArea(nidm_file_list):
+    """Return per-subject cortical surface-area measurement values.
+
+    :param nidm_file_list: comma-separated string of NIDM file paths
+    :return: dataframe of subject ID, tool, labels, laterality and surface-area value
+    """
+    # Same subject/DataElement join as GetBrainVolumes but selecting the surface
+    # area measure (measureOf PATO_0001323).
     query = """
         # This query simply returns the brain surface area data without dependencies on other demographics/assessment measures.
 
@@ -1765,6 +1896,16 @@ def getDataTypeInfo(source_graph, datatype):
 
 
 def getStatsCollectionForNode(rdf_graph, derivatives_node):
+    """Extract the stats-collection type and measured values for a node.
+
+    Walks every triple of *derivatives_node*: the nidm: rdf:type becomes the
+    StatCollectionType, and each remaining predicate that resolves to a known
+    DataElement contributes a value entry (datumType, label, value, units).
+
+    :param rdf_graph: parsed RDF graph containing the node
+    :param derivatives_node: URI of the stats collection
+    :return: dict {"URI", "StatCollectionType", "values": {predicate: {...}}}
+    """
     isa = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
     data = {"URI": derivatives_node, "values": {}}
 
@@ -1840,6 +1981,11 @@ def OpenGraph(file):
 
 
 def GetDerivativesDataForSubject(files, project, subject):
+    """Return software-agent-generated derivative data for a subject.
+
+    Thin wrapper that converts *files* to a hashable tuple and delegates to the
+    lru_cached :func:`GetDerivativesDataForSubjectCache`.
+    """
     return GetDerivativesDataForSubjectCache(tuple(files), project, subject)
 
 
@@ -1891,6 +2037,10 @@ def getSoftwareAgents(rdf_graph):
 
 
 def download_cde_files():
+    """Download the canonical CDE .ttl files into the temp dir.
+
+    :return: path to the directory the files were written to
+    """
     cde_dir = tempfile.gettempdir()
 
     for url in Constants.CDE_FILE_LOCATIONS:
@@ -1900,6 +2050,16 @@ def download_cde_files():
 
 
 def getCDEs(file_list=None):
+    """Return a merged, cached graph of the Common Data Element definitions.
+
+    Results are memoized on ``getCDEs.cache`` and additionally persisted to a
+    per-file-list pickle in the temp dir.  When *file_list* is None the FSL,
+    FreeSurfer and ANTs CDE files are located via the CDE_DIR env var, a known
+    install path, or downloaded on demand.
+
+    :param file_list: optional explicit list of CDE .ttl files to load
+    :return: rdflib Graph containing all CDE definitions
+    """
     if getCDEs.cache:
         return getCDEs.cache
 
