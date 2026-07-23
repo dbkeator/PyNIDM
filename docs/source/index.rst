@@ -18,6 +18,8 @@ A Python library to manipulate the `Neuroimaging Data Model
    :maxdepth: 2
    :caption: Contents:
 
+   developer_manual
+
 Dependencies
 ============
 * `Git-annex <https://git-annex.branchable.com/install/>`_
@@ -32,6 +34,22 @@ Installation
 .. code:: bash
 
 	$ pip install pynidm
+
+The default install ships the prov-free LinkML implementation
+(``nidm.linkml``), which backs all of the ``pynidm`` command-line tools and no
+longer depends on the ``prov`` toolbox. The original prov-toolbox API — the
+legacy wrapper classes under ``nidm.experiment`` (``Project``, ``Session``,
+``Acquisition``, ...) — is optional and requires the ``legacy`` extra:
+
+.. code:: bash
+
+	$ pip install pynidm[legacy]
+
+New code should use ``nidm.linkml.experiment``. The prov-free query, navigation,
+CDE and REST layers (``nidm.experiment.Query`` / ``Navigate`` / ``CDE`` /
+``tools.rest``) continue to import without the extra — they re-export the
+relocated implementations in ``nidm.linkml``. For architecture, the schema →
+code workflow, and how to extend the model, see the :ref:`developer_manual`.
 
 Contributing to the Software
 =============================
