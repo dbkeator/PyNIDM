@@ -33,6 +33,21 @@ Installation
 
 	$ pip install pynidm
 
+The default install ships the prov-free LinkML implementation (``nidm.linkml``),
+which backs the ``pynidm`` command-line tools and no longer depends on the
+``prov`` toolbox. The original prov-toolbox API -- the legacy wrapper classes
+under ``nidm.experiment`` (``Project``, ``Session``, ``Acquisition``, ...) --
+is optional and now requires the ``legacy`` extra:
+
+.. code:: bash
+
+	$ pip install pynidm[legacy]
+
+New code should use ``nidm.linkml.experiment`` instead. The prov-free query,
+navigation, CDE and REST layers (``nidm.experiment.Query`` /
+``Navigate`` / ``CDE`` / ``tools.rest``) continue to import without the extra --
+they now re-export the relocated implementations in ``nidm.linkml``.
+
 Contributing to the Software
 =============================
 This software is open source and community developed.  As such, we encourage

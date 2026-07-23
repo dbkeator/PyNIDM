@@ -231,9 +231,9 @@ Outstanding work, in roughly descending priority:
 | # | Task | Notes |
 |---|---|---|
 | 8 (continued) | Port the remaining 19 CLI tools | nidm_query, nidm_utils, click_main, etc.  bidsmri2nidm and csv2nidm are the templates. |
-| 10 | Port `src/nidm/workflows/` | NIDM-Statistics + provone.  Independent block. |
+| 10 | ~~Port `src/nidm/workflows/`~~ **DONE** | Legacy provone/NIDM-Statistics (`nidm.workflows`, `nidm.core.provone`, `nidm.core.dot`, `nidm.core.serializers`) deleted in step 5; the LinkML reimplementation lives in `nidm.linkml.workflows`. |
 | 11 | Migrate the legacy test suite onto the new package | Run the ~3000 legacy tests against new wrappers. |
-| 12 | Cutover | Swap `setup.cfg` console_scripts to point at `nidm.linkml`; deprecate the legacy `nidm.experiment` and `nidm.core` modules. |
+| 12 | ~~Cutover~~ **DONE** | `setup.cfg` console_scripts point at `nidm.linkml`; `Query`/`CDE`/`Navigate`/`rest` + tool modules relocated to `nidm.linkml` with reverse-shims (steps 4/4b); `prov` moved to the optional `[legacy]` extra and `nidm.experiment.__init__` made lazy (step 5). |
 | 7 (Part B) | Legacy-vs-new parity harness | Byte-level isomorphism on the curated fixture set.  Needs BNode canonicalization. |
 | 13 | README + RTD docs + developer manual | The first iteration of the manual is `docs/DEVELOPER_MANUAL.md`. |
 | 14 | Final verification | Full old + new + parity test sweeps + divergence review. |
@@ -242,9 +242,13 @@ Outstanding work, in roughly descending priority:
 
 ## Things to watch for
 
-1. **`prov` is still in `install_requires`** because the legacy
-   `nidm.experiment` and `nidm.core` modules import it.  After
-   cutover (task 12) it can be dropped.
+1. **`prov` is now an optional `[legacy]` extra** (dropped from
+   `install_requires` in step 5).  The shipped LinkML surface imports no
+   prov; `nidm.experiment.__init__` loads the prov-based wrapper classes
+   lazily, so the reverse-shim submodules (`Query`/`CDE`/`Navigate`/
+   `tools.rest`) still import prov-free.  Install the wrapper classes with
+   `pip install pynidm[legacy]`.  `tests/linkml/test_prov_free.py` guards
+   this by blocking `prov` at import time.
 
 2. **The new `read_nidm` is `~100` lines** vs the legacy `~540`.  This
    was a 5× simplification by going rdflib-native instead of routing
