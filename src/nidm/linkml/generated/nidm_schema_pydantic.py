@@ -10,20 +10,44 @@ Source schema: src/nidm/experiment/schema/nidm_schema.yaml
 # ruff: noqa  -- generated file
 # fmt: off
 from __future__ import annotations
-from datetime import date, datetime, time
-from decimal import Decimal
-from enum import Enum
+
 import re
 import sys
-from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from datetime import (
+    date,
+    datetime,
+    time
+)
+from decimal import Decimal
+from enum import Enum
+from typing import (
+    Any,
+    ClassVar,
+    Literal,
+    Optional,
+    Union
+)
 
-metamodel_version = "None"
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer
+)
+
+
+metamodel_version = "1.11.0"
 version = "0.1.0"
 
 
 class ConfiguredBaseModel(BaseModel):
     model_config = ConfigDict(
+        serialize_by_alias = True,
+        validate_by_name = True,
         validate_assignment = True,
         validate_default = True,
         extra = "forbid",
@@ -31,13 +55,13 @@ class ConfiguredBaseModel(BaseModel):
         use_enum_values = True,
         strict = False,
     )
-    pass
+
 
 
 
 
 class LinkMLMeta(RootModel):
-    root: Dict[str, Any] = {}
+    root: dict[str, Any] = {}
     model_config = ConfigDict(frozen=True)
 
     def __getattr__(self, key:str):
@@ -310,7 +334,7 @@ linkml_meta = LinkMLMeta({'annotations': {'graph_hierarchy': {'tag': 'graph_hier
                           'prefix_reference': 'http://semanticscience.org/ontology/sio.owl#'},
                   'xsd': {'prefix_prefix': 'xsd',
                           'prefix_reference': 'http://www.w3.org/2001/XMLSchema#'}},
-     'source_file': '/Users/dbkeator/Documents/Coding/PyNIDM/src/nidm/experiment/schema/nidm_schema.yaml',
+     'source_file': '/Users/dkeator/Documents/Coding/PyNIDM/src/nidm/experiment/schema/nidm_schema.yaml',
      'title': 'NIDM-Experiment Schema'} )
 
 class AcquisitionModalityEnum(str, Enum):
@@ -355,8 +379,7 @@ class Project(ConfiguredBaseModel):
                       'Children are linked back to the Project via dct:isPartOf'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., description="""URI of this Project (typically niiri:<uuid>)""", json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., description="""URI of this Project (typically niiri:<uuid>)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -367,25 +390,17 @@ class Project(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    title: Optional[str] = Field(default=None, description="""Project or study name""", json_schema_extra = { "linkml_meta": {'alias': 'title', 'domain_of': ['Project'], 'slot_uri': 'dctypes:title'} })
-    description: Optional[str] = Field(default=None, description="""Project description""", json_schema_extra = { "linkml_meta": {'alias': 'description',
-         'domain_of': ['Project', 'DataElement'],
-         'slot_uri': 'dct:description'} })
-    license: Optional[str] = Field(default=None, description="""Data license""", json_schema_extra = { "linkml_meta": {'alias': 'license',
-         'domain_of': ['Project', 'Collection'],
-         'slot_uri': 'dct:license'} })
-    funding: Optional[str] = Field(default=None, description="""Funding information""", json_schema_extra = { "linkml_meta": {'alias': 'funding', 'domain_of': ['Project'], 'slot_uri': 'obo:IAO_0000623'} })
-    acknowledgments: Optional[str] = Field(default=None, description="""Acknowledgments""", json_schema_extra = { "linkml_meta": {'alias': 'acknowledgments',
-         'domain_of': ['Project'],
-         'slot_uri': 'obo:IAO_0000324'} })
-    project_identifier: Optional[str] = Field(default=None, description="""Project version or identifier""", json_schema_extra = { "linkml_meta": {'alias': 'project_identifier',
-         'domain_of': ['Project'],
-         'slot_uri': 'sio:Identifier'} })
-    author: Optional[str] = Field(default=None, description="""Dataset author(s)""", json_schema_extra = { "linkml_meta": {'alias': 'author', 'domain_of': ['Project'], 'slot_uri': 'dcat:author'} })
-    version: Optional[str] = Field(default=None, description="""Dataset version""", json_schema_extra = { "linkml_meta": {'alias': 'version', 'domain_of': ['Project'], 'slot_uri': 'dct:hasVersion'} })
-    sessions: Optional[List[Session]] = Field(default=None, description="""Sessions belonging to this project""", json_schema_extra = { "linkml_meta": {'alias': 'sessions', 'domain_of': ['Project']} })
-    data_elements: Optional[List[DataElement]] = Field(default=None, description="""DataElement definitions for this project""", json_schema_extra = { "linkml_meta": {'alias': 'data_elements', 'domain_of': ['Project']} })
-    derivatives: Optional[List[Derivative]] = Field(default=None, description="""Derivative processing activities""", json_schema_extra = { "linkml_meta": {'alias': 'derivatives', 'domain_of': ['Project']} })
+    title: Optional[str] = Field(default=None, description="""Project or study name""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'dctypes:title'} })
+    description: Optional[str] = Field(default=None, description="""Project description""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project', 'DataElement'], 'slot_uri': 'dct:description'} })
+    license: Optional[str] = Field(default=None, description="""Data license""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project', 'Collection'], 'slot_uri': 'dct:license'} })
+    funding: Optional[str] = Field(default=None, description="""Funding information""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'obo:IAO_0000623'} })
+    acknowledgments: Optional[str] = Field(default=None, description="""Acknowledgments""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'obo:IAO_0000324'} })
+    project_identifier: Optional[str] = Field(default=None, description="""Project version or identifier""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'sio:Identifier'} })
+    author: Optional[str] = Field(default=None, description="""Dataset author(s)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'dcat:author'} })
+    version: Optional[str] = Field(default=None, description="""Dataset version""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project'], 'slot_uri': 'dct:hasVersion'} })
+    sessions: Optional[list[Session]] = Field(default=None, description="""Sessions belonging to this project""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project']} })
+    data_elements: Optional[list[DataElement]] = Field(default=None, description="""DataElement definitions for this project""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project']} })
+    derivatives: Optional[list[Derivative]] = Field(default=None, description="""Derivative processing activities""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project']} })
 
 
 class Session(ConfiguredBaseModel):
@@ -399,8 +414,7 @@ class Session(ConfiguredBaseModel):
                       'Linked to Project via dct:isPartOf'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -411,13 +425,10 @@ class Session(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    is_part_of: Optional[str] = Field(default=None, description="""The Project this Session belongs to""", json_schema_extra = { "linkml_meta": {'alias': 'is_part_of',
-         'domain_of': ['Session', 'Acquisition', 'Derivative'],
+    is_part_of: Optional[str] = Field(default=None, description="""The Project this Session belongs to""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
          'slot_uri': 'dct:isPartOf'} })
-    session_number: Optional[str] = Field(default=None, description="""Session number within the study""", json_schema_extra = { "linkml_meta": {'alias': 'session_number',
-         'domain_of': ['Session'],
-         'slot_uri': 'bids:session_number'} })
-    acquisitions: Optional[List[Acquisition]] = Field(default=None, description="""Acquisition activities in this session""", json_schema_extra = { "linkml_meta": {'alias': 'acquisitions', 'domain_of': ['Session']} })
+    session_number: Optional[str] = Field(default=None, description="""Session number within the study""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session'], 'slot_uri': 'bids:session_number'} })
+    acquisitions: Optional[list[Acquisition]] = Field(default=None, description="""Acquisition activities in this session""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session']} })
 
 
 class Acquisition(ConfiguredBaseModel):
@@ -436,8 +447,7 @@ class Acquisition(ConfiguredBaseModel):
                       'sio:Subject)'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -448,13 +458,10 @@ class Acquisition(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    is_part_of: Optional[str] = Field(default=None, description="""The Session this Acquisition belongs to""", json_schema_extra = { "linkml_meta": {'alias': 'is_part_of',
-         'domain_of': ['Session', 'Acquisition', 'Derivative'],
+    is_part_of: Optional[str] = Field(default=None, description="""The Session this Acquisition belongs to""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
          'slot_uri': 'dct:isPartOf'} })
-    qualified_association: Optional[List[Association]] = Field(default=None, description="""Association(s) linking this activity to agents (participants)""", json_schema_extra = { "linkml_meta": {'alias': 'qualified_association',
-         'domain_of': ['Acquisition'],
-         'slot_uri': 'prov:qualifiedAssociation'} })
-    acquisition_objects: Optional[List[AcquisitionObject]] = Field(default=None, description="""Entities generated by this acquisition""", json_schema_extra = { "linkml_meta": {'alias': 'acquisition_objects', 'domain_of': ['Acquisition']} })
+    qualified_association: Optional[list[Association]] = Field(default=None, description="""Association(s) linking this activity to agents (participants)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition'], 'slot_uri': 'prov:qualifiedAssociation'} })
+    acquisition_objects: Optional[list[AcquisitionObject]] = Field(default=None, description="""Entities generated by this acquisition""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition']} })
 
 
 class AcquisitionObject(ConfiguredBaseModel):
@@ -473,8 +480,7 @@ class AcquisitionObject(ConfiguredBaseModel):
                       'with literal values.'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -485,28 +491,16 @@ class AcquisitionObject(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    was_generated_by: Optional[str] = Field(default=None, description="""The Acquisition that produced this object""", json_schema_extra = { "linkml_meta": {'alias': 'was_generated_by',
-         'domain_of': ['AcquisitionObject', 'DerivativeObject'],
+    was_generated_by: Optional[str] = Field(default=None, description="""The Acquisition that produced this object""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject', 'DerivativeObject'],
          'slot_uri': 'prov:wasGeneratedBy'} })
-    acquisition_modality: Optional[AcquisitionModalityEnum] = Field(default=None, description="""Imaging modality (MRI, PET)""", json_schema_extra = { "linkml_meta": {'alias': 'acquisition_modality',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'nidm:hadAcquisitionModality'} })
-    image_contrast_type: Optional[ImageContrastTypeEnum] = Field(default=None, description="""Image contrast type (T1, T2, DWI, etc.)""", json_schema_extra = { "linkml_meta": {'alias': 'image_contrast_type',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'nidm:hadImageContrastType'} })
-    image_usage_type: Optional[ImageUsageTypeEnum] = Field(default=None, description="""Intended image usage (Anatomical, Functional, DWI)""", json_schema_extra = { "linkml_meta": {'alias': 'image_usage_type',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'nidm:hadImageUsageType'} })
-    task: Optional[str] = Field(default=None, description="""Task name for functional MRI""", json_schema_extra = { "linkml_meta": {'alias': 'task', 'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:Task'} })
-    filename: Optional[str] = Field(default=None, description="""File path, often in BIDS format (e.g. bids::sub-XX/anat/sub-XX_T1w.nii.gz)""", json_schema_extra = { "linkml_meta": {'alias': 'filename',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'nfo:filename'} })
-    sha512: Optional[str] = Field(default=None, description="""SHA-512 hash of the file""", json_schema_extra = { "linkml_meta": {'alias': 'sha512',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'crypto:sha512'} })
-    location: Optional[str] = Field(default=None, description="""URL or file path location""", json_schema_extra = { "linkml_meta": {'alias': 'location',
-         'domain_of': ['AcquisitionObject'],
-         'slot_uri': 'prov:Location'} })
+    acquisition_modality: Optional[AcquisitionModalityEnum] = Field(default=None, description="""Imaging modality (MRI, PET)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadAcquisitionModality'} })
+    image_contrast_type: Optional[ImageContrastTypeEnum] = Field(default=None, description="""Image contrast type (T1, T2, DWI, etc.)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageContrastType'} })
+    image_usage_type: Optional[ImageUsageTypeEnum] = Field(default=None, description="""Intended image usage (Anatomical, Functional, DWI)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageUsageType'} })
+    task: Optional[str] = Field(default=None, description="""Task name for functional MRI""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:Task'} })
+    run: Optional[int] = Field(default=None, description="""Run number for the acquisition (BIDS run entity).  Written by bidsmri2nidm/csv2nidm as nidm:AcquisitionObject with an integer value.""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:AcquisitionObject'} })
+    filename: Optional[str] = Field(default=None, description="""File path, often in BIDS format (e.g. bids::sub-XX/anat/sub-XX_T1w.nii.gz)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nfo:filename'} })
+    sha512: Optional[str] = Field(default=None, description="""SHA-512 hash of the file""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'crypto:sha512'} })
+    location: Optional[str] = Field(default=None, description="""URL or file path location""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'prov:Location'} })
 
 
 class DataElement(ConfiguredBaseModel):
@@ -525,8 +519,7 @@ class DataElement(ConfiguredBaseModel):
                       'instead of niiri: for their URIs.'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., description="""URI of this DataElement.  May use niiri:, freesurfer:, fsl:, or ants: namespace depending on origin.""", json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., description="""URI of this DataElement.  May use niiri:, freesurfer:, fsl:, or ants: namespace depending on origin.""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -537,38 +530,19 @@ class DataElement(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    label: Optional[str] = Field(default=None, description="""Human-readable variable label""", json_schema_extra = { "linkml_meta": {'alias': 'label',
-         'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
+    label: Optional[str] = Field(default=None, description="""Human-readable variable label""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
          'slot_uri': 'rdfs:label'} })
-    description: Optional[str] = Field(default=None, description="""Variable description""", json_schema_extra = { "linkml_meta": {'alias': 'description',
-         'domain_of': ['Project', 'DataElement'],
-         'slot_uri': 'dct:description'} })
-    is_about: Optional[str] = Field(default=None, description="""Ontology concept this variable measures (typically ilx:, obo:, or dicom: URI)""", json_schema_extra = { "linkml_meta": {'alias': 'is_about', 'domain_of': ['DataElement'], 'slot_uri': 'nidm:isAbout'} })
-    source_variable: Optional[str] = Field(default=None, description="""Original variable name in source data""", json_schema_extra = { "linkml_meta": {'alias': 'source_variable',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:sourceVariable'} })
-    value_type: Optional[str] = Field(default=None, description="""XSD data type (xsd:string, xsd:float, xsd:integer)""", json_schema_extra = { "linkml_meta": {'alias': 'value_type',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:valueType'} })
-    min_value: Optional[str] = Field(default=None, description="""Minimum allowed value""", json_schema_extra = { "linkml_meta": {'alias': 'min_value',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:minValue'} })
-    max_value: Optional[str] = Field(default=None, description="""Maximum allowed value""", json_schema_extra = { "linkml_meta": {'alias': 'max_value',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:maxValue'} })
-    measure_of: Optional[str] = Field(default=None, description="""Brain structure or region measured""", json_schema_extra = { "linkml_meta": {'alias': 'measure_of',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:measureOf'} })
-    datum_type: Optional[str] = Field(default=None, description="""Type of measurement (e.g. anatomical volume)""", json_schema_extra = { "linkml_meta": {'alias': 'datum_type',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:datumType'} })
-    has_unit: Optional[str] = Field(default=None, description="""Unit of measurement (e.g. mm^3)""", json_schema_extra = { "linkml_meta": {'alias': 'has_unit', 'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasUnit'} })
-    has_laterality: Optional[str] = Field(default=None, description="""Brain laterality (Left, Right, Bilateral)""", json_schema_extra = { "linkml_meta": {'alias': 'has_laterality',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:hasLaterality'} })
-    choices: Optional[str] = Field(default=None, description="""Valid categorical choices for this variable""", json_schema_extra = { "linkml_meta": {'alias': 'choices',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'reproschema:choices'} })
+    description: Optional[str] = Field(default=None, description="""Variable description""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project', 'DataElement'], 'slot_uri': 'dct:description'} })
+    is_about: Optional[str] = Field(default=None, description="""Ontology concept this variable measures (typically ilx:, obo:, or dicom: URI)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:isAbout'} })
+    source_variable: Optional[str] = Field(default=None, description="""Original variable name in source data""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:sourceVariable'} })
+    value_type: Optional[str] = Field(default=None, description="""XSD data type (xsd:string, xsd:float, xsd:integer)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:valueType'} })
+    min_value: Optional[str] = Field(default=None, description="""Minimum allowed value""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:minValue'} })
+    max_value: Optional[str] = Field(default=None, description="""Maximum allowed value""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:maxValue'} })
+    measure_of: Optional[str] = Field(default=None, description="""Brain structure or region measured""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:measureOf'} })
+    datum_type: Optional[str] = Field(default=None, description="""Type of measurement (e.g. anatomical volume)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:datumType'} })
+    has_unit: Optional[str] = Field(default=None, description="""Unit of measurement (e.g. mm^3)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasUnit'} })
+    has_laterality: Optional[str] = Field(default=None, description="""Brain laterality (Left, Right, Bilateral)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasLaterality'} })
+    choices: Optional[str] = Field(default=None, description="""Valid categorical choices for this variable""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'reproschema:choices'} })
 
 
 class PersonalDataElement(DataElement):
@@ -582,8 +556,7 @@ class PersonalDataElement(DataElement):
                       'nidm:PersonalDataElement rdfs:subClassOf nidm:DataElement'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., description="""URI of this DataElement.  May use niiri:, freesurfer:, fsl:, or ants: namespace depending on origin.""", json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., description="""URI of this DataElement.  May use niiri:, freesurfer:, fsl:, or ants: namespace depending on origin.""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -594,38 +567,19 @@ class PersonalDataElement(DataElement):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    label: Optional[str] = Field(default=None, description="""Human-readable variable label""", json_schema_extra = { "linkml_meta": {'alias': 'label',
-         'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
+    label: Optional[str] = Field(default=None, description="""Human-readable variable label""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
          'slot_uri': 'rdfs:label'} })
-    description: Optional[str] = Field(default=None, description="""Variable description""", json_schema_extra = { "linkml_meta": {'alias': 'description',
-         'domain_of': ['Project', 'DataElement'],
-         'slot_uri': 'dct:description'} })
-    is_about: Optional[str] = Field(default=None, description="""Ontology concept this variable measures (typically ilx:, obo:, or dicom: URI)""", json_schema_extra = { "linkml_meta": {'alias': 'is_about', 'domain_of': ['DataElement'], 'slot_uri': 'nidm:isAbout'} })
-    source_variable: Optional[str] = Field(default=None, description="""Original variable name in source data""", json_schema_extra = { "linkml_meta": {'alias': 'source_variable',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:sourceVariable'} })
-    value_type: Optional[str] = Field(default=None, description="""XSD data type (xsd:string, xsd:float, xsd:integer)""", json_schema_extra = { "linkml_meta": {'alias': 'value_type',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:valueType'} })
-    min_value: Optional[str] = Field(default=None, description="""Minimum allowed value""", json_schema_extra = { "linkml_meta": {'alias': 'min_value',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:minValue'} })
-    max_value: Optional[str] = Field(default=None, description="""Maximum allowed value""", json_schema_extra = { "linkml_meta": {'alias': 'max_value',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:maxValue'} })
-    measure_of: Optional[str] = Field(default=None, description="""Brain structure or region measured""", json_schema_extra = { "linkml_meta": {'alias': 'measure_of',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:measureOf'} })
-    datum_type: Optional[str] = Field(default=None, description="""Type of measurement (e.g. anatomical volume)""", json_schema_extra = { "linkml_meta": {'alias': 'datum_type',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:datumType'} })
-    has_unit: Optional[str] = Field(default=None, description="""Unit of measurement (e.g. mm^3)""", json_schema_extra = { "linkml_meta": {'alias': 'has_unit', 'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasUnit'} })
-    has_laterality: Optional[str] = Field(default=None, description="""Brain laterality (Left, Right, Bilateral)""", json_schema_extra = { "linkml_meta": {'alias': 'has_laterality',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'nidm:hasLaterality'} })
-    choices: Optional[str] = Field(default=None, description="""Valid categorical choices for this variable""", json_schema_extra = { "linkml_meta": {'alias': 'choices',
-         'domain_of': ['DataElement'],
-         'slot_uri': 'reproschema:choices'} })
+    description: Optional[str] = Field(default=None, description="""Variable description""", json_schema_extra = { "linkml_meta": {'domain_of': ['Project', 'DataElement'], 'slot_uri': 'dct:description'} })
+    is_about: Optional[str] = Field(default=None, description="""Ontology concept this variable measures (typically ilx:, obo:, or dicom: URI)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:isAbout'} })
+    source_variable: Optional[str] = Field(default=None, description="""Original variable name in source data""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:sourceVariable'} })
+    value_type: Optional[str] = Field(default=None, description="""XSD data type (xsd:string, xsd:float, xsd:integer)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:valueType'} })
+    min_value: Optional[str] = Field(default=None, description="""Minimum allowed value""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:minValue'} })
+    max_value: Optional[str] = Field(default=None, description="""Maximum allowed value""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:maxValue'} })
+    measure_of: Optional[str] = Field(default=None, description="""Brain structure or region measured""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:measureOf'} })
+    datum_type: Optional[str] = Field(default=None, description="""Type of measurement (e.g. anatomical volume)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:datumType'} })
+    has_unit: Optional[str] = Field(default=None, description="""Unit of measurement (e.g. mm^3)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasUnit'} })
+    has_laterality: Optional[str] = Field(default=None, description="""Brain laterality (Left, Right, Bilateral)""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'nidm:hasLaterality'} })
+    choices: Optional[str] = Field(default=None, description="""Valid categorical choices for this variable""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement'], 'slot_uri': 'reproschema:choices'} })
 
 
 class Derivative(ConfiguredBaseModel):
@@ -639,8 +593,7 @@ class Derivative(ConfiguredBaseModel):
                       'Linked to Project via dct:isPartOf'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -651,12 +604,9 @@ class Derivative(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    is_part_of: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'alias': 'is_part_of',
-         'domain_of': ['Session', 'Acquisition', 'Derivative'],
+    is_part_of: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
          'slot_uri': 'dct:isPartOf'} })
-    used: Optional[str] = Field(default=None, description="""Source entity consumed by this derivative activity""", json_schema_extra = { "linkml_meta": {'alias': 'used',
-         'domain_of': ['Derivative', 'ExportActivity'],
-         'slot_uri': 'prov:used'} })
+    used: Optional[str] = Field(default=None, description="""Source entity consumed by this derivative activity""", json_schema_extra = { "linkml_meta": {'domain_of': ['Derivative', 'ExportActivity'], 'slot_uri': 'prov:used'} })
 
 
 class DerivativeObject(ConfiguredBaseModel):
@@ -671,8 +621,7 @@ class DerivativeObject(ConfiguredBaseModel):
                       'as properties using DataElement URIs as predicates.'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -683,8 +632,7 @@ class DerivativeObject(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    was_generated_by: Optional[str] = Field(default=None, description="""The Derivative activity that produced this object""", json_schema_extra = { "linkml_meta": {'alias': 'was_generated_by',
-         'domain_of': ['AcquisitionObject', 'DerivativeObject'],
+    was_generated_by: Optional[str] = Field(default=None, description="""The Derivative activity that produced this object""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject', 'DerivativeObject'],
          'slot_uri': 'prov:wasGeneratedBy'} })
 
 
@@ -700,8 +648,7 @@ class Person(ConfiguredBaseModel):
                       'prov:Association (with prov:hadRole sio:Subject)'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -712,9 +659,7 @@ class Person(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    subject_id: Optional[str] = Field(default=None, description="""Subject ID in the study (e.g. 'sub-0050002').  This is the primary human-readable identifier for participants.""", json_schema_extra = { "linkml_meta": {'alias': 'subject_id',
-         'domain_of': ['Person'],
-         'slot_uri': 'ndar:src_subject_id'} })
+    subject_id: Optional[str] = Field(default=None, description="""Subject ID in the study (e.g. 'sub-0050002').  This is the primary human-readable identifier for participants.""", json_schema_extra = { "linkml_meta": {'domain_of': ['Person'], 'slot_uri': 'ndar:src_subject_id'} })
 
 
 class SoftwareAgent(ConfiguredBaseModel):
@@ -727,8 +672,7 @@ class SoftwareAgent(ConfiguredBaseModel):
          'comments': ['RDF types: prov:SoftwareAgent, prov:Agent'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -739,17 +683,12 @@ class SoftwareAgent(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    label: Optional[str] = Field(default=None, description="""Display name (e.g. 'PyNIDM bidsmri2nidm.py')""", json_schema_extra = { "linkml_meta": {'alias': 'label',
-         'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
+    label: Optional[str] = Field(default=None, description="""Display name (e.g. 'PyNIDM bidsmri2nidm.py')""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
          'slot_uri': 'rdfs:label'} })
-    name: Optional[str] = Field(default=None, description="""Software name (e.g. 'PyNIDM')""", json_schema_extra = { "linkml_meta": {'alias': 'name', 'domain_of': ['SoftwareAgent'], 'slot_uri': 'schema:name'} })
-    software_version: Optional[str] = Field(default=None, description="""Software version string""", json_schema_extra = { "linkml_meta": {'alias': 'software_version',
-         'domain_of': ['SoftwareAgent'],
-         'slot_uri': 'schema:softwareVersion'} })
-    command: Optional[str] = Field(default=None, description="""Command or script name""", json_schema_extra = { "linkml_meta": {'alias': 'command', 'domain_of': ['SoftwareAgent'], 'slot_uri': 'nidm:command'} })
-    runtime_platform: Optional[str] = Field(default=None, description="""Runtime environment (e.g. 'Python 3.9.23')""", json_schema_extra = { "linkml_meta": {'alias': 'runtime_platform',
-         'domain_of': ['SoftwareAgent'],
-         'slot_uri': 'schema:runtimePlatform'} })
+    name: Optional[str] = Field(default=None, description="""Software name (e.g. 'PyNIDM')""", json_schema_extra = { "linkml_meta": {'domain_of': ['SoftwareAgent'], 'slot_uri': 'schema:name'} })
+    software_version: Optional[str] = Field(default=None, description="""Software version string""", json_schema_extra = { "linkml_meta": {'domain_of': ['SoftwareAgent'], 'slot_uri': 'schema:softwareVersion'} })
+    command: Optional[str] = Field(default=None, description="""Command or script name""", json_schema_extra = { "linkml_meta": {'domain_of': ['SoftwareAgent'], 'slot_uri': 'nidm:command'} })
+    runtime_platform: Optional[str] = Field(default=None, description="""Runtime environment (e.g. 'Python 3.9.23')""", json_schema_extra = { "linkml_meta": {'domain_of': ['SoftwareAgent'], 'slot_uri': 'schema:runtimePlatform'} })
 
 
 class Association(ConfiguredBaseModel):
@@ -761,8 +700,8 @@ class Association(ConfiguredBaseModel):
                       'Created as a blank node in the graph'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    agent: Optional[str] = Field(default=None, description="""The agent (participant) involved""", json_schema_extra = { "linkml_meta": {'alias': 'agent', 'domain_of': ['Association'], 'slot_uri': 'prov:agent'} })
-    had_role: Optional[str] = Field(default=None, description="""Role of the agent (typically sio:Subject)""", json_schema_extra = { "linkml_meta": {'alias': 'had_role', 'domain_of': ['Association'], 'slot_uri': 'prov:hadRole'} })
+    agent: Optional[str] = Field(default=None, description="""The agent (participant) involved""", json_schema_extra = { "linkml_meta": {'domain_of': ['Association'], 'slot_uri': 'prov:agent'} })
+    had_role: Optional[str] = Field(default=None, description="""Role of the agent (typically sio:Subject)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Association'], 'slot_uri': 'prov:hadRole'} })
 
 
 class Collection(ConfiguredBaseModel):
@@ -778,8 +717,7 @@ class Collection(ConfiguredBaseModel):
                       'nidm:ANTSStatsCollection'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -790,13 +728,9 @@ class Collection(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    bids_version: Optional[str] = Field(default=None, description="""BIDS standard version""", json_schema_extra = { "linkml_meta": {'alias': 'bids_version',
-         'domain_of': ['Collection'],
-         'slot_uri': 'bids:BIDSVersion'} })
-    license: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'alias': 'license',
-         'domain_of': ['Project', 'Collection'],
-         'slot_uri': 'dct:license'} })
-    members: Optional[List[str]] = Field(default=None, description="""Member entities of this collection""", json_schema_extra = { "linkml_meta": {'alias': 'members', 'domain_of': ['Collection'], 'slot_uri': 'prov:hadMember'} })
+    bids_version: Optional[str] = Field(default=None, description="""BIDS standard version""", json_schema_extra = { "linkml_meta": {'domain_of': ['Collection'], 'slot_uri': 'bids:BIDSVersion'} })
+    license: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Project', 'Collection'], 'slot_uri': 'dct:license'} })
+    members: Optional[list[str]] = Field(default=None, description="""Member entities of this collection""", json_schema_extra = { "linkml_meta": {'domain_of': ['Collection'], 'slot_uri': 'prov:hadMember'} })
 
 
 class ExportActivity(ConfiguredBaseModel):
@@ -811,8 +745,7 @@ class ExportActivity(ConfiguredBaseModel):
                       'or Project'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
-    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'alias': 'identifier',
-         'domain_of': ['Project',
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
                        'Session',
                        'Acquisition',
                        'AcquisitionObject',
@@ -823,24 +756,13 @@ class ExportActivity(ConfiguredBaseModel):
                        'SoftwareAgent',
                        'Collection',
                        'ExportActivity']} })
-    label: Optional[str] = Field(default=None, description="""Human-readable label (e.g. 'Create NIDM RDF from BIDS dataset', 'Add CSV data to NIDM file')""", json_schema_extra = { "linkml_meta": {'alias': 'label',
-         'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
+    label: Optional[str] = Field(default=None, description="""Human-readable label (e.g. 'Create NIDM RDF from BIDS dataset', 'Add CSV data to NIDM file')""", json_schema_extra = { "linkml_meta": {'domain_of': ['DataElement', 'SoftwareAgent', 'ExportActivity'],
          'slot_uri': 'rdfs:label'} })
-    output_format: Optional[str] = Field(default=None, description="""Output format (e.g. 'turtle')""", json_schema_extra = { "linkml_meta": {'alias': 'output_format',
-         'domain_of': ['ExportActivity'],
-         'slot_uri': 'nidm:outputFormat'} })
-    started_at_time: Optional[datetime ] = Field(default=None, json_schema_extra = { "linkml_meta": {'alias': 'started_at_time',
-         'domain_of': ['ExportActivity'],
-         'slot_uri': 'prov:startedAtTime'} })
-    ended_at_time: Optional[datetime ] = Field(default=None, json_schema_extra = { "linkml_meta": {'alias': 'ended_at_time',
-         'domain_of': ['ExportActivity'],
-         'slot_uri': 'prov:endedAtTime'} })
-    was_associated_with: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'alias': 'was_associated_with',
-         'domain_of': ['ExportActivity'],
-         'slot_uri': 'prov:wasAssociatedWith'} })
-    used: Optional[str] = Field(default=None, description="""Input entity (Collection or Project) that was used""", json_schema_extra = { "linkml_meta": {'alias': 'used',
-         'domain_of': ['Derivative', 'ExportActivity'],
-         'slot_uri': 'prov:used'} })
+    output_format: Optional[str] = Field(default=None, description="""Output format (e.g. 'turtle')""", json_schema_extra = { "linkml_meta": {'domain_of': ['ExportActivity'], 'slot_uri': 'nidm:outputFormat'} })
+    started_at_time: Optional[datetime ] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['ExportActivity'], 'slot_uri': 'prov:startedAtTime'} })
+    ended_at_time: Optional[datetime ] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['ExportActivity'], 'slot_uri': 'prov:endedAtTime'} })
+    was_associated_with: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['ExportActivity'], 'slot_uri': 'prov:wasAssociatedWith'} })
+    used: Optional[str] = Field(default=None, description="""Input entity (Collection or Project) that was used""", json_schema_extra = { "linkml_meta": {'domain_of': ['Derivative', 'ExportActivity'], 'slot_uri': 'prov:used'} })
 
 
 # Model rebuild
