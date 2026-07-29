@@ -1041,11 +1041,24 @@ def bidsmri2project(
     for bare_id in sorted(subjects_to_process):
         if bare_id.startswith("."):  # skip .git etc. (datalad datasets)
             continue
-        subject_id = "sub-" + bare_id
-
         person = persons_by_subj.get(bare_id)
         if person is None:
-            person = Person(project, subject_id=subject_id)
+            # The participants.tsv walk keys persons by the tsv participant_id
+            # (e.g. "50666"), but pybids reports the subject as the BIDS
+            # directory label WITH leading zeros ("0050666").  Match tolerantly
+            # (ignoring leading zeros) so we REUSE the existing Person instead
+            # of minting a duplicate agent -- the duplicate would carry a second
+            # "sub-XXXX"-form ndar:src_subject_id and diverge from legacy output.
+            target = bare_id.lstrip("0")
+            for k, p in persons_by_subj.items():
+                if k.lstrip("0") == target:
+                    person = p
+                    persons_by_subj[bare_id] = p  # cache under the bare_id too
+                    break
+        if person is None:
+            # No participants.tsv row for this subject: create a Person using the
+            # numeric subject id (NOT "sub-XXXX"), matching legacy src_subject_id.
+            person = Person(project, subject_id=bare_id)
             persons_by_subj[bare_id] = person
 
         imaging_sessions = bids_layout.get_sessions(subject=bare_id)
@@ -1315,8 +1328,31 @@ def main(argv: Optional[list] = None) -> int:
 
 
 def _bids_filename(scan_path: Path, bids_root: Path) -> str:
-    """Return a ``bids::``-prefixed relative path string."""
-    rel = scan_path.resolve().relative_to(bids_root.resolve()).as_posix()
+    """Return a ``bids::``-prefixed relative path string (logical BIDS path).
+
+    We deliberately do NOT resolve the *file* symlink.  datalad/git-annex
+    stores BIDS image files as symlinks into ``.git/annex/objects``; calling
+    ``Path.resolve()`` on the file would follow that symlink and record the
+    opaque annex-object key (``.git/annex/objects/.../MD5E-...nii.gz``) as
+    ``nfo:filename`` instead of the meaningful ``sub-XX_..._bold.nii.gz`` name.
+    Instead we resolve only the *parent* directory -- which normalizes things
+    like macOS ``/tmp`` -> ``/private/tmp`` and any directory symlinks -- and
+    re-attach the original basename.  This reproduces the legacy
+    ``getRelPathToBIDS`` behavior, so bidsmri2nidm's ``nfo:filename`` is
+    byte-identical across the legacy and LinkML tools (parity preserved) and
+    stays a real BIDS path on datalad-annex datasets.
+    """
+    scan_path = Path(scan_path)
+    bids_root = Path(bids_root)
+    # resolve the parent (dir symlinks / macOS /tmp) but keep the file's own
+    # basename so an annex file symlink is never followed
+    logical = scan_path.parent.resolve() / scan_path.name
+    root = bids_root.resolve()
+    try:
+        rel = logical.relative_to(root).as_posix()
+    except ValueError:
+        # scan_path not strictly under bids_root -- fall back to a string strip
+        rel = str(logical).replace(str(root), "").lstrip("/")
     return f"bids::{rel}"
 
 

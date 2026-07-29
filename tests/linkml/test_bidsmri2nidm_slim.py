@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 from rdflib import Graph, Literal
 from rdflib.namespace import RDF
+from nidm.linkml.core import bids_constants as BIDS_Constants
+from nidm.linkml.core import constants as _C
 from nidm.linkml.core.namespaces import (
     BIDS,
     DCTYPES,
@@ -39,8 +41,6 @@ from nidm.linkml.experiment.tools.bidsmri2nidm import (
     bidsmri2project,
     main,
 )
-from nidm.linkml.core import bids_constants as BIDS_Constants
-from nidm.linkml.core import constants as _C
 
 # AssessmentObject is typed onli:assessment-instrument in the wrapper.
 _ASSESSMENT_OBJECT_TYPE = ONLI["assessment-instrument"]
@@ -292,7 +292,11 @@ def test_person_carries_subject_id(tmp_path: Path):
     g = project.graph
     person = list(g.subjects(RDF.type, PROV.Person))[0]
     ids = list(g.objects(person, NDAR.src_subject_id))
-    assert [str(i) for i in ids] == ["sub-0050002"]
+    # When there is no participants.tsv row, the imaging walk creates the
+    # Person using the NUMERIC subject id (the "sub-" prefix is stripped),
+    # matching the legacy bidsmri2nidm output -- exactly one src_subject_id,
+    # no duplicate "sub-XXXX"-form agent.
+    assert [str(i) for i in ids] == ["0050002"]
 
 
 # ---------------------------------------------------------------------------
