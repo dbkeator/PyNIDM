@@ -178,19 +178,16 @@ def query(
 
         return df
     elif get_instruments:
-        # first get all project UUIDs then iterate and get instruments adding to output dataframe
+        # get all project UUIDs, then concat each project's instruments.
+        # (pandas >=2.0 removed DataFrame.append; build a list and pd.concat --
+        # this also yields an empty frame instead of crashing when there are no
+        # projects/instruments, e.g. a pure FreeSurfer-derivative NIDM file.)
         project_list = GetProjectsUUID(nidm_file_list.split(","))
-        count = 1
-        for project in project_list:
-            if count == 1:
-                df = GetProjectInstruments(
-                    nidm_file_list.split(","), project_id=project
-                )
-                count += 1
-            else:
-                df = df.append(
-                    GetProjectInstruments(nidm_file_list.split(","), project_id=project)
-                )
+        frames = [
+            GetProjectInstruments(nidm_file_list.split(","), project_id=project)
+            for project in project_list
+        ]
+        df = pd.concat(frames) if frames else pd.DataFrame()
 
         # write dataframe
         # if output file parameter specified
@@ -199,21 +196,15 @@ def query(
         else:
             print(df.to_string())
     elif get_instrument_vars:
-        # first get all project UUIDs then iterate and get instruments adding to output dataframe
+        # get all project UUIDs, then concat each project's instrument variables.
+        # (pandas >=2.0 removed DataFrame.append; build a list and pd.concat --
+        # also yields an empty frame instead of crashing when there are none.)
         project_list = GetProjectsUUID(nidm_file_list.split(","))
-        count = 1
-        for project in project_list:
-            if count == 1:
-                df = GetInstrumentVariables(
-                    nidm_file_list.split(","), project_id=project
-                )
-                count += 1
-            else:
-                df = df.append(
-                    GetInstrumentVariables(
-                        nidm_file_list.split(","), project_id=project
-                    )
-                )
+        frames = [
+            GetInstrumentVariables(nidm_file_list.split(","), project_id=project)
+            for project in project_list
+        ]
+        df = pd.concat(frames) if frames else pd.DataFrame()
 
         # write dataframe
         # if output file parameter specified
