@@ -5,7 +5,8 @@ DO NOT EDIT BY HAND.  Regenerate with::
 
     python scripts/regen_schema.py
 
-Source schema: src/nidm/experiment/schema/nidm_schema.yaml
+Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+Generated with:  linkml 1.11.1
 """
 # ruff: noqa  -- generated file
 # fmt: off

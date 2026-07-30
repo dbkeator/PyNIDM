@@ -5,7 +5,8 @@ DO NOT EDIT BY HAND.  Regenerate with::
 
     python scripts/regen_schema.py
 
-Source schema: src/nidm/experiment/schema/nidm_schema.yaml
+Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+Generated with:  linkml 1.11.1
 
 gen-pydantic does not preserve permissible_value ``meaning:`` URIs or
 per-slot ``range:`` info on the generated classes, so the wrapper

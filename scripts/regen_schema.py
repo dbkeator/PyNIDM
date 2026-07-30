@@ -25,17 +25,39 @@ Notes
   need the [linkml] extras.
 """
 from __future__ import annotations
-
-import sys
 from pathlib import Path
+import sys
 from textwrap import dedent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO_ROOT / "src" / "nidm" / "experiment" / "schema" / "nidm_schema.yaml"
-OUTPUT_PATH = REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_pydantic.py"
-META_OUTPUT_PATH = REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_meta.py"
+OUTPUT_PATH = (
+    REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_pydantic.py"
+)
+META_OUTPUT_PATH = (
+    REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_meta.py"
+)
 
-HEADER = dedent(
+
+def _linkml_version() -> str:
+    """Return the installed ``linkml`` version string (or ``"unknown"``).
+
+    Stamped into the generated file headers so a regenerated diff caused by a
+    LinkML upgrade (generator output drifts across releases) is immediately
+    explainable rather than looking like a schema change.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("linkml")
+        except PackageNotFoundError:
+            return "unknown"
+    except ImportError:  # pragma: no cover -- py<3.8 only
+        return "unknown"
+
+
+HEADER_TEMPLATE = dedent(
     '''\
     """
     Auto-generated Pydantic classes for the NIDM-Experiment LinkML schema.
@@ -44,7 +66,8 @@ HEADER = dedent(
 
         python scripts/regen_schema.py
 
-    Source schema: src/nidm/experiment/schema/nidm_schema.yaml
+    Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+    Generated with:  linkml {linkml_version}
     """
     # ruff: noqa  -- generated file
     # fmt: off
@@ -67,12 +90,15 @@ def main() -> int:
         )
         return 2
 
+    linkml_version = _linkml_version()
     print(f"Reading schema:  {SCHEMA_PATH.relative_to(REPO_ROOT)}")
+    print(f"linkml version:  {linkml_version}")
     generator = PydanticGenerator(str(SCHEMA_PATH))
     body = generator.serialize()
 
+    header = HEADER_TEMPLATE.format(linkml_version=linkml_version)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(HEADER + body)
+    OUTPUT_PATH.write_text(header + body)
     print(f"Wrote generated module: {OUTPUT_PATH.relative_to(REPO_ROOT)}")
     print(f"  {len(body.splitlines())} lines, {len(body)} bytes")
 
@@ -123,23 +149,24 @@ def _write_meta_module() -> None:
 
     lines = [
         '"""',
-        'Auto-generated meaning maps for the NIDM LinkML schema.',
-        '',
-        'DO NOT EDIT BY HAND.  Regenerate with::',
-        '',
-        '    python scripts/regen_schema.py',
-        '',
-        'Source schema: src/nidm/experiment/schema/nidm_schema.yaml',
-        '',
-        'gen-pydantic does not preserve permissible_value ``meaning:`` URIs or',
-        'per-slot ``range:`` info on the generated classes, so the wrapper',
-        'layer reads them from these static maps instead.',
+        "Auto-generated meaning maps for the NIDM LinkML schema.",
+        "",
+        "DO NOT EDIT BY HAND.  Regenerate with::",
+        "",
+        "    python scripts/regen_schema.py",
+        "",
+        "Source schema:   src/nidm/experiment/schema/nidm_schema.yaml",
+        f"Generated with:  linkml {_linkml_version()}",
+        "",
+        "gen-pydantic does not preserve permissible_value ``meaning:`` URIs or",
+        "per-slot ``range:`` info on the generated classes, so the wrapper",
+        "layer reads them from these static maps instead.",
         '"""',
-        '# ruff: noqa  -- generated file',
-        '# fmt: off',
-        '',
-        '# (enum_class_name, permissible_value_name) -> meaning CURIE',
-        'ENUM_MEANINGS = {',
+        "# ruff: noqa  -- generated file",
+        "# fmt: off",
+        "",
+        "# (enum_class_name, permissible_value_name) -> meaning CURIE",
+        "ENUM_MEANINGS = {",
     ]
     for (enum_name, pv_name), meaning in sorted(enum_meanings.items()):
         lines.append(f"    ({enum_name!r}, {pv_name!r}): {meaning!r},")
