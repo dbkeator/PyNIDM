@@ -1,7 +1,7 @@
 """Tools for working with NIDM-Experiment files"""
 
 import click
-from rdflib import Graph, util
+from rdflib import Graph, URIRef, util
 from nidm.linkml.core import constants as _C
 from nidm.linkml.experiment.query import GetParticipantIDs
 from nidm.linkml.experiment.tools.click_base import cli
@@ -92,6 +92,11 @@ def merge(nidm_file_list, s, out_file):
                         uuid_replacement = first_file_subjids.iloc[
                             [*filter(t.get, t.index)][0], 0
                         ]
+                        # pandas may store the rdflib URIRef (a str subclass) as
+                        # a plain str; rdflib >=6.3 rejects non-Node terms in
+                        # graph.add (crashes under pandas >=3), so coerce back to
+                        # a URIRef explicitly -- version-independent.
+                        uuid_replacement = URIRef(str(uuid_replacement))
 
                         for subj, pred, obj in graph.triples((None, None, None)):
                             if subj == row["uuid"]:
