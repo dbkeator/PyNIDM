@@ -447,7 +447,9 @@ def test_CheckSubjectMatchesFilter(brain_vol: BrainVol) -> None:
                 )
                 is False
             )
-        # TODO deal with spaces in identifiers and CheckSubjectMatchesFilter
+        # Spaces in the identifier (e.g. "age at scan") are now handled by the
+        # operator-aware clause splitter (_split_filter_clause), so the filter
+        # matcher parses these the same as the underscore form above.
         elif "age at scan" in inst:
             age = inst["age at scan"]
 
@@ -456,11 +458,39 @@ def test_CheckSubjectMatchesFilter(brain_vol: BrainVol) -> None:
 
             assert inst["age at scan"] is not None
 
-            # assert Query.CheckSubjectMatchesFilter(brain_vol.files, project, subject, f"instruments.age at scan eq {age}")
-            # assert (Query.CheckSubjectMatchesFilter(brain_vol.files, project, subject, f"instruments.age at scan lt {younger}") == False)
-            # assert (Query.CheckSubjectMatchesFilter(brain_vol.files, project, subject, f"instruments.age at scan gt {younger}") == True)
-            # assert Query.CheckSubjectMatchesFilter(brain_vol.files, project, subject, f"instruments.age at scan lt {older}")
-            # assert (Query.CheckSubjectMatchesFilter(brain_vol.files, project, subject, f"instruments.age at scan gt {older}") == False)
+            assert Query.CheckSubjectMatchesFilter(
+                brain_vol.files, project, subject, f"instruments.age at scan eq {age}"
+            )
+            assert (
+                Query.CheckSubjectMatchesFilter(
+                    brain_vol.files,
+                    project,
+                    subject,
+                    f"instruments.age at scan lt {younger}",
+                )
+                is False
+            )
+            assert (
+                Query.CheckSubjectMatchesFilter(
+                    brain_vol.files,
+                    project,
+                    subject,
+                    f"instruments.age at scan gt {younger}",
+                )
+                is True
+            )
+            assert Query.CheckSubjectMatchesFilter(
+                brain_vol.files, project, subject, f"instruments.age at scan lt {older}"
+            )
+            assert (
+                Query.CheckSubjectMatchesFilter(
+                    brain_vol.files,
+                    project,
+                    subject,
+                    f"instruments.age at scan gt {older}",
+                )
+                is False
+            )
 
 
 def test_ExtremeFilters(brain_vol: BrainVol) -> None:

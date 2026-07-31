@@ -1315,6 +1315,39 @@ def trimWellKnownURIPrefix(uri):
     return trimmed
 
 
+# The only comparison operators filterCompare understands.  Used to locate the
+# operator token when splitting a filter clause so that spaces in the subject
+# (e.g. "instruments.age at scan") or a quoted value (e.g. "'not a match'") do
+# not break parsing.
+_FILTER_OPS = ("eq", "lt", "gt")
+
+
+def _split_filter_clause(clause):
+    """Split a single ``subject op value`` filter clause into its three parts.
+
+    The operator is the leftmost standalone ``eq``/``lt``/``gt`` token (each
+    surrounded by spaces); everything before it is the subject and everything
+    after is the value.  This means *both* the subject and the value may
+    contain spaces -- e.g. ``"instruments.age at scan eq 21"`` or
+    ``"instruments.WISC_IV_VOCAB_SCALED eq 'not a match'"`` -- which the old
+    naive ``str.split(" ")`` mis-parsed.  Returns ``None`` when the clause has
+    no recognizable operator (the caller treats that as a non-match).
+    """
+    stripped = clause.strip()
+    best_idx = None
+    best_op = None
+    for op in _FILTER_OPS:
+        idx = stripped.find(f" {op} ")
+        if idx != -1 and (best_idx is None or idx < best_idx):
+            best_idx, best_op = idx, op
+    if best_idx is None:
+        return None
+    token = f" {best_op} "
+    subject = stripped[:best_idx].strip()
+    value = stripped[best_idx + len(token) :].strip()
+    return subject, best_op, value
+
+
 def CheckSubjectMatchesFilter(
     nidm_file_list, project_uuid, subject_uuid, filter  # noqa: A002
 ):
@@ -1332,31 +1365,26 @@ def CheckSubjectMatchesFilter(
     if filter is None:
         return True
 
-    # filter can have multiple and clauses, break them up and test each one
-    tests = filter.split("and")
+    # filter can have multiple "and" clauses; split on the word "and" (with
+    # surrounding whitespace) so it never breaks a subject/value that merely
+    # contains the substring "and".
+    tests = re.split(r"\s+and\s+", filter.strip())
 
     for test in tests:
         found_match = False
-        split_array = test.split(" ")
-        # TODO: I need to fix this here.  When there is a space inside the value the splitter gets more than 3 values
-        # ex: 'projects.subjects.instruments.WISC_IV_VOCAB_SCALED eq \'not a match\''
-        # in this case we must have spaces in identifier: 'projects.subjects.instruments.age at scan eq 21
-        # not guaranteed to always be an 'eq' separator.
-        # TODO: Make more robust!
-        # if len(split_array) > 3:
-        #    split_array = test.split('eq')
-        #    compound_sub = split_array[0]
-        #    op = 'eq'
-        #    value = ' '.join(split_array[1:])
-        # else:
-        compound_sub = split_array[0]
-        op = split_array[1]
-        value = " ".join(split_array[2:])
+        # locate the eq/lt/gt operator so spaces inside the subject or the
+        # (quoted) value don't get mis-split -- see _split_filter_clause.
+        parsed = _split_filter_clause(test)
+        if parsed is None:
+            # no recognizable operator -> this "and" term cannot match
+            return False
+        compound_sub, op, value = parsed
 
-        # if the value is a string, it will have quotes around it.  Strip them out now
+        # if the value is a quoted string, strip the surrounding quotes
         for quote in ["'", '"', "`"]:
-            if value[0] == quote and value[-1] == quote:
+            if len(value) >= 2 and value[0] == quote and value[-1] == quote:
                 value = value[1:-1]
+                break
 
         sub_pieces = splitSubject(compound_sub)
 
@@ -2036,6 +2064,12 @@ def getSoftwareAgents(rdf_graph):
     return agents
 
 
+# Basenames of the canonical CDE files, derived from CDE_FILE_LOCATIONS so this
+# list stays in sync automatically when the CDE set changes (previously a
+# hardcoded ["ants_cde.ttl", "fs_cde.ttl", "fsl_cde.ttl"]).
+_CDE_FILENAMES = [url.split("/")[-1] for url in Constants.CDE_FILE_LOCATIONS]
+
+
 def download_cde_files():
     """Download the canonical CDE .ttl files into the temp dir.
 
@@ -2090,9 +2124,10 @@ def getCDEs(file_list=None):
         if not cde_dir:
             cde_dir = download_cde_files()
 
-        # TODO: the list of file names should be it's own constant or derived from CDE_FILE_LOCATIONS
+        # filenames derived from CDE_FILE_LOCATIONS (see _CDE_FILENAMES) so they
+        # never drift from the canonical CDE set.
         file_list = []
-        for f in ["ants_cde.ttl", "fs_cde.ttl", "fsl_cde.ttl"]:
+        for f in _CDE_FILENAMES:
             fname = f"{cde_dir}/{f}"
             if os.path.isfile(fname):
                 file_list.append(fname)
