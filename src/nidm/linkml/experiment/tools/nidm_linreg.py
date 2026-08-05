@@ -1,15 +1,21 @@
 """This program provides a tool to complete a linear regression on nidm files"""
 
 import csv
+from dataclasses import dataclass, field
 import os
 from statistics import mean
 import sys
 import tempfile
+from typing import Any
 import warnings
 import click
 import numpy as np
 import pandas as pd
-from patsy.contrasts import ContrastMatrix, Diff, Helmert, Sum, Treatment
+
+# Diff/Helmert/Sum/Treatment are referenced by *name* inside the patsy formula
+# strings built in contrasting(), so they must stay imported even though they
+# are not used directly in Python (hence the noqa).
+from patsy.contrasts import ContrastMatrix, Diff, Helmert, Sum, Treatment  # noqa: F401
 from patsy.highlevel import dmatrices
 from sklearn import preprocessing
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
@@ -22,6 +28,43 @@ from nidm.linkml.experiment.tools.rest import RestParser
 from nidm.linkml.experiment.tools.utils import Reporter
 
 MAX_ALPHA = 700
+
+
+@dataclass
+class _LinRegState:
+    """Mutable state shared across the linear-regression phases.
+
+    Replaces the module-level globals the phases previously communicated
+    through.  One instance is created per invocation in
+    :func:`linear_regression` and threaded through the phases:
+    ``data_aggregation -> dataparsing -> linreg -> contrasting -> regularizing``.
+    Each phase unpacks what it reads at the top and writes back the values
+    later phases need, so the (intricate) per-phase logic is unchanged.
+    """
+
+    # command-line parameters
+    c: Any = None  # -contrast variable(s); contrasting() may rewrite it
+    m: str = ""  # -model string, stripped
+    n: str = ""  # raw comma-separated -nl string
+    r: Any = None  # -r regularization type (L1/L2) or None
+
+    # produced by data_aggregation()
+    file_list: list = field(default_factory=list)
+    condensed_data_holder: dict = field(default_factory=dict)
+    full_model_variable_list: list = field(default_factory=list)
+    dep_var: Any = None
+    independentvariables: list = field(default_factory=list)
+
+    # produced by dataparsing()
+    condensed_data: list = field(default_factory=list)
+    answer: str = "?"
+    df_final: Any = None
+
+    # produced by linreg()
+    full_model: str = ""
+    levels: list = field(default_factory=list)
+    X: Any = None
+    y: Any = None
 
 
 # Defining the parameters of the commands.
@@ -61,29 +104,27 @@ def linear_regression(nidm_file_list, output_file, ml, ctr, regularization):
     This function provides a tool to complete a linear regression on NIDM data with optional contrast and regularization.
     """
 
-    # NOTE: Every time I make a global variable, it is because I need it in at least one other method.
-    global c  # used in linreg(), contrasting()
-    c = ctr  # Storing all important parameters in global variables so they can be accessed in other methods
-    global m  # Needed to do this because the code only used the parameters in the first method, meaning I had to move it all to method 1.
-    m = (
-        ml.strip()
-    )  # used in data_aggregation, linreg(), spaces stripped from left and right
+    # All parameters + intermediate results live on a single state object that
+    # is threaded through the phases (previously ~18 module-level globals).
+    state = _LinRegState(
+        c=ctr,
+        m=ml.strip(),  # spaces stripped from left and right
+        n=nidm_file_list,
+        r=regularization,
+    )
     with Reporter(output_file) as reporter:
-        global n  # used in data_aggregation()
-        n = nidm_file_list
-        global r
-        r = regularization
-        data_aggregation(reporter)  # collects data
-        dataparsing(reporter)  # converts it to proper format
-        linreg(reporter)  # performs linear regression
-        contrasting(reporter)  # performs contrast
-        regularizing(reporter)  # performs regularization
+        data_aggregation(reporter, state)  # collects data
+        dataparsing(reporter, state)  # converts it to proper format
+        linreg(reporter, state)  # performs linear regression
+        contrasting(reporter, state)  # performs contrast
+        regularizing(reporter, state)  # performs regularization
 
 
-def data_aggregation(reporter):  # all data from all the files is collected
+def data_aggregation(reporter, state):  # all data from all the files is collected
     """
     This function provides query support for NIDM graphs.
     """
+    c, m, n, r = state.c, state.m, state.n, state.r
     # if there is a CDE file list, seed the CDE cache
     if m:  # ex: fs_00343 ~ age + sex + group
         print("*" * 107)
@@ -96,10 +137,7 @@ def data_aggregation(reporter):  # all data from all the files is collected
         verbosity = 0
         restParser = RestParser(verbosity_level=int(verbosity))
         restParser.setOutputFormat(RestParser.OBJECT_FORMAT)
-        global df_list  # used in dataparsing()
-        df_list = []
         # set up uri to do fields query for each nidm file
-        global file_list
         file_list = n.split(",")
         df_list_holder = {}
         for i in range(len(file_list)):
@@ -107,7 +145,6 @@ def data_aggregation(reporter):  # all data from all the files is collected
         df_holder = {}
         for i in range(len(file_list)):
             df_holder[i] = []
-        global condensed_data_holder
         condensed_data_holder = {}
         for i in range(len(file_list)):
             condensed_data_holder[i] = []
@@ -118,7 +155,6 @@ def data_aggregation(reporter):  # all data from all the files is collected
             # get project UUID
             project = GetProjectsUUID([nidm_file])
             # split the model into its constituent variables
-            global full_model_variable_list
             # below, we edit the model so it splits by +,~, or =. However, to help it out in catching everything
             # we replaced ~ and = with a + so that we can still use split. Regex wasn't working.
             plus_replace = m
@@ -131,10 +167,8 @@ def data_aggregation(reporter):  # all data from all the files is collected
             model_list = [v.strip() for v in plus_replace.split("+")]
             full_model_variable_list = []
             # set the dependent variable to the one dependent variable in the model
-            global dep_var  # used in dataparsing(), linreg(), and contrasting()
             dep_var = model_list[0]
             # join the independent variables into a comma-separated list to make it easier to call from the uri
-            global ind_vars  # used in dataparsing()
             ind_vars = ""
             for i in range(len(model_list) - 1, 0, -1):
                 full_model_variable_list.append(
@@ -168,7 +202,6 @@ def data_aggregation(reporter):  # all data from all the files is collected
             )
             # get fields output from each file and concatenate
             df_list_holder[count].append(pd.DataFrame(restParser.run([nidm_file], uri)))
-            # global dep_var
             df = pd.concat(df_list_holder[count])
             with tempfile.NamedTemporaryFile(
                 delete=False
@@ -180,7 +213,6 @@ def data_aggregation(reporter):  # all data from all the files is collected
                     csv.reader(fp)
                 )  # makes the csv a 2D list to make it easier to call the contents of certain cells
 
-            global independentvariables  # used in linreg
             independentvariables = ind_vars.split(
                 ","
             )  # makes a list of the independent variables
@@ -332,6 +364,14 @@ def data_aggregation(reporter):  # all data from all the files is collected
                 not_found_list.clear()
                 not_found_count += 1
                 print()
+
+        # publish the aggregated results for the downstream phases
+        state.file_list = file_list
+        state.condensed_data_holder = condensed_data_holder
+        state.full_model_variable_list = full_model_variable_list
+        state.dep_var = dep_var
+        state.independentvariables = independentvariables
+
         if not_found_count > 0:
             sys.exit(1)
 
@@ -343,16 +383,19 @@ def data_aggregation(reporter):  # all data from all the files is collected
 
 
 def dataparsing(
-    reporter,
+    reporter, state
 ):  # The data is changed to a format that is usable by the linear regression method
     """Reshape and encode the aggregated data for regression.
 
     Flattens the per-file condensed data into one table, warns (and
     optionally aborts) when there are fewer than 20 data points, and
     label-encodes categorical columns so the model can consume them.
-    Publishes the cleaned frame as the global ``df_final``.
+    Publishes the cleaned frame as ``state.df_final``.
     """
-    global condensed_data
+    m = state.m
+    file_list = state.file_list
+    condensed_data_holder = state.condensed_data_holder
+
     condensed_data = []
     for i in range(0, len(file_list)):
         condensed_data = condensed_data + condensed_data_holder[i]
@@ -370,7 +413,6 @@ def dataparsing(
     # responds with N, it exits the code after writing the error to the output
     # file (if there is one).  If the user says Y instead, the code runs, but
     # stops before doing the regularization.
-    global answer
     answer = "?"
     if (len(condensed_data) - 1) < 20:
         print(
@@ -427,19 +469,23 @@ def dataparsing(
     obj_df_trf = obj_df.astype(str).apply(
         le.fit_transform
     )  # transforms the categorical variables into numbers.
-    global df_final  # also used in linreg()
     if not obj_df_trf.empty:
         df_final = pd.concat(
             [df_int_float, obj_df_trf], axis=1
         )  # join_axes=[df_int_float.index])
     else:
         df_final = df_int_float
+
+    state.condensed_data = condensed_data
+    state.answer = answer
+    state.df_final = df_final
+
     reporter.print(df_final.to_string(header=True, index=True))
     reporter.print("\n\n" + ("*" * 107))
     reporter.print("\n\nModel Results: ")
 
 
-def linreg(reporter):  # actual linear regression
+def linreg(reporter, state):  # actual linear regression
     """Fit and report the ordinary-least-squares model.
 
     Builds the patsy formula from the parsed model string (handling
@@ -447,6 +493,14 @@ def linreg(reporter):  # actual linear regression
     and prints the OLS summary.  Skipped downstream of a contrast run
     (that path is handled in :func:`contrasting`).
     """
+    c = state.c
+    m = state.m
+    dep_var = state.dep_var
+    full_model_variable_list = state.full_model_variable_list
+    condensed_data = state.condensed_data
+    independentvariables = state.independentvariables
+    df_final = state.df_final
+
     print("Model Results: ")
     # printing the corrected model_string
     model_string = []
@@ -456,14 +510,12 @@ def linreg(reporter):  # actual linear regression
         model_string.append(fmv)
         model_string.append(" + ")
     model_string.pop(-1)
-    global full_model
     full_model = "".join(model_string)
     print(full_model)  # prints model
     print()
     print("*" * 107)
     print()
     index = 0
-    global levels  # also used in contrasting()
     levels = []
     for i in range(len(condensed_data[0])):
         if c == condensed_data[0][i]:
@@ -474,8 +526,6 @@ def linreg(reporter):  # actual linear regression
     levels = list(range(len(levels)))
 
     # Beginning of the linear regression
-    global X
-    global y
     if "*" in m:
         # correcting the format of the model string
         model_string = []
@@ -497,6 +547,12 @@ def linreg(reporter):  # actual linear regression
             independentvariables
         ]  # gets the modified values of the independent variables
         y = df_final[dep_var]  # gets the modified values of the dependent variable
+
+    state.full_model = full_model
+    state.levels = levels
+    state.X = X
+    state.y = y
+
     if not c:
         # The linear regression
         regressor = LinearRegression()
@@ -512,7 +568,30 @@ def linreg(reporter):  # actual linear regression
         return finalstats
 
 
-def contrasting(reporter):
+# Contrast (dummy) coding schemes fit after the base model, other than the
+# special-cased Treatment coding.  (name-in-formula, description) pairs; each
+# shares an identical build/fit/report shape so they run in one loop.
+_CONTRAST_CODINGS = [
+    (
+        "Simple",
+        "\n\nSimple Coding: Like Treatment Coding, Simple Coding compares each level to a fixed reference level. However, with simple coding, the intercept is the grand mean of all the levels of the factors.",
+    ),
+    (
+        "Sum",
+        "\n\nSum (Deviation) Coding: Sum coding compares the mean of the dependent variable for a given level to the overall mean of the dependent variable over all the levels.",
+    ),
+    (
+        "Diff",
+        "\n\nBackward Difference Coding: In backward difference coding, the mean of the dependent variable for a level is compared with the mean of the dependent variable for the prior level.",
+    ),
+    (
+        "Helmert",
+        "\n\nHelmert Coding: Our version of Helmert coding is sometimes referred to as Reverse Helmert Coding. The mean of the dependent variable for a level is compared to the mean of the dependent variable over all previous levels. Hence, the name ‘reverse’ being sometimes applied to differentiate from forward Helmert coding.",
+    ),
+]
+
+
+def contrasting(reporter, state):
     """Fit the model under each contrast (dummy) coding scheme.
 
     When a contrast variable was supplied, refits the OLS model using
@@ -521,8 +600,12 @@ def contrasting(reporter):
     so the user can compare level effects under different reference
     conventions.
     """
-    global c
-    global full_model_variable_list
+    c = state.c
+    full_model_variable_list = state.full_model_variable_list
+    dep_var = state.dep_var
+    df_final = state.df_final
+    full_model = state.full_model
+
     if c:
         # to account for multiple contrast variables
         contrastvars = []
@@ -550,27 +633,14 @@ def contrasting(reporter):
             if " " in c:
                 c = c.replace(" ", "_")
             contraststring = c
-        # With contrast (treatment coding)
-        reporter.print_file("\n" + full_model)
-        reporter.print_file("\n\n" + ("*" * 107))
-        reporter.print(
-            "\n\nTreatment (Dummy) Coding: Dummy coding compares each level of the categorical variable to a base reference level. The base reference level is the value of the intercept."
-        )
-        Treatment(reference=0).code_without_intercept(levels)
-        mod = ols(
-            dep_var
-            + " ~ "
-            + ind_vars_no_contrast_var
-            + " + C("
-            + contraststring
-            + ", Treatment)",
-            data=df_final,
-        )
-        res = mod.fit()
-        reporter.print("With contrast (treatment coding)")
-        reporter.print(res.summary())
 
-        # Defining the Simple class
+        # publish the (possibly rewritten) contrast var + variable list so the
+        # regularization phase sees the same values the globals used to carry.
+        state.c = c
+        state.full_model_variable_list = full_model_variable_list
+
+        # Defining the Simple class (referenced by name in the patsy formula
+        # below, so it must be in scope when statsmodels evaluates it).
         def _name_levels(prefix, levels):
             """Format contrast column names as ``[prefix<level>]`` for patsy."""
             return [f"[{prefix}{level}]" for level in levels]
@@ -597,75 +667,60 @@ def contrasting(reporter):
                 c = self._simple_contrast(levels)
                 return ContrastMatrix(c, _name_levels("Simp.", levels[:-1]))
 
-        Simple().code_without_intercept(levels)
-        mod = ols(
-            dep_var
-            + " ~ "
-            + ind_vars_no_contrast_var
-            + " + C("
-            + contraststring
-            + ", Simple)",
-            data=df_final,
-        )
-        res = mod.fit()
+        # Fit the OLS model with the categorical contrast var coded by the named
+        # scheme.  ``ols`` is called *directly here* (not via a helper) so patsy
+        # evaluates the coding name -- including the local ``Simple`` class --
+        # from this frame's scope.
+        def _contrast_formula(coding_name):
+            return (
+                dep_var
+                + " ~ "
+                + ind_vars_no_contrast_var
+                + " + C("
+                + contraststring
+                + ", "
+                + coding_name
+                + ")"
+            )
+
+        assert Simple  # referenced in the "Simple" formula below (string eval)
+
+        # Treatment coding is reported first, with its own preamble.
+        reporter.print_file("\n" + full_model)
+        reporter.print_file("\n\n" + ("*" * 107))
         reporter.print(
-            "\n\nSimple Coding: Like Treatment Coding, Simple Coding compares each level to a fixed reference level. However, with simple coding, the intercept is the grand mean of all the levels of the factors."
+            "\n\nTreatment (Dummy) Coding: Dummy coding compares each level of the categorical variable to a base reference level. The base reference level is the value of the intercept."
         )
+        res = ols(_contrast_formula("Treatment"), data=df_final).fit()
+        reporter.print("With contrast (treatment coding)")
         reporter.print(res.summary())
 
-        # With contrast (sum/deviation coding)
-        Sum().code_without_intercept(levels)
-        mod = ols(
-            dep_var
-            + " ~ "
-            + ind_vars_no_contrast_var
-            + " + C("
-            + contraststring
-            + ", Sum)",
-            data=df_final,
-        )
-        res = mod.fit()
-        reporter.print(
-            "\n\nSum (Deviation) Coding: Sum coding compares the mean of the dependent variable for a given level to the overall mean of the dependent variable over all the levels."
-        )
-        reporter.print(res.summary())
-
-        # With contrast (backward difference coding)
-        Diff().code_without_intercept(levels)
-        mod = ols(
-            dep_var
-            + " ~ "
-            + ind_vars_no_contrast_var
-            + " + C("
-            + contraststring
-            + ", Diff)",
-            data=df_final,
-        )
-        res = mod.fit()
-        reporter.print(
-            "\n\nBackward Difference Coding: In backward difference coding, the mean of the dependent variable for a level is compared with the mean of the dependent variable for the prior level."
-        )
-        reporter.print(res.summary())
-
-        # With contrast (Helmert coding)
-        Helmert().code_without_intercept(levels)
-        mod = ols(
-            dep_var
-            + " ~ "
-            + ind_vars_no_contrast_var
-            + " + C("
-            + contraststring
-            + ", Helmert)",
-            data=df_final,
-        )
-        res = mod.fit()
-        reporter.print(
-            "\n\nHelmert Coding: Our version of Helmert coding is sometimes referred to as Reverse Helmert Coding. The mean of the dependent variable for a level is compared to the mean of the dependent variable over all previous levels. Hence, the name ‘reverse’ being sometimes applied to differentiate from forward Helmert coding."
-        )
-        reporter.print(res.summary())
+        # The remaining coding schemes share the same build/fit/report shape.
+        for coding_name, description in _CONTRAST_CODINGS:
+            res = ols(_contrast_formula(coding_name), data=df_final).fit()
+            reporter.print(description)
+            reporter.print(res.summary())
 
 
-def regularizing(reporter):
+def _best_alpha(model_cls, X, y):
+    """Return the regularization strength (alpha) in ``1..MAX_ALPHA`` with the
+    highest mean 10-fold cross-validated score for *model_cls* on ``(X, y)``.
+    """
+    max_cross_val_alpha = 1
+    max_cross_val_score = -1000000000.000  # super negative number initially
+    for x in range(1, MAX_ALPHA):
+        model = model_cls(alpha=x, tol=0.0925)
+        model.fit(X, y)
+        scores = cross_val_score(model, X, y, cv=10)
+        avg_cross_val_score = mean(scores) * 100
+        # figure out which alpha yields the max likelihood (cross-val) score
+        if avg_cross_val_score > max_cross_val_score:
+            max_cross_val_alpha = x
+            max_cross_val_score = avg_cross_val_score
+    return max_cross_val_alpha
+
+
+def regularizing(reporter, state):
     """Fit an L1 (Lasso) or L2 (Ridge) regularized model when requested.
 
     Sweeps the regularization strength (alpha) from 1 to ``MAX_ALPHA``,
@@ -673,23 +728,15 @@ def regularizing(reporter):
     alpha, and reports the coefficients and intercept.  Skipped when the
     user opted to proceed past the low-data warning in :func:`dataparsing`.
     """
+    r = state.r
+    answer = state.answer
+    X = state.X
+    y = state.y
+    full_model_variable_list = state.full_model_variable_list
+
     # does it say L1, and has the user chosen to go ahead with running the code?
     if r in ("L1", "Lasso", "l1", "lasso") and "y" not in answer.lower():
-        # Loop to compute the cross-validation scores
-        max_cross_val_alpha = 1
-        max_cross_val_score = (
-            -1000000000.000
-        )  # making it a super negative number initially
-        for x in range(1, MAX_ALPHA):
-            lassoModel = Lasso(alpha=x, tol=0.0925)
-            lassoModel.fit(X, y)
-            scores = cross_val_score(lassoModel, X, y, cv=10)
-            avg_cross_val_score = mean(scores) * 100
-            # figure out which setting of the regularization parameter results in the max likelihood score
-            if avg_cross_val_score > max_cross_val_score:
-                max_cross_val_alpha = x
-                max_cross_val_score = avg_cross_val_score
-
+        max_cross_val_alpha = _best_alpha(Lasso, X, y)
         # Building and fitting the Lasso Regression Model
         lassoModelChosen = Lasso(alpha=max_cross_val_alpha, tol=0.0925)
         lassoModelChosen.fit(X, y)
@@ -708,22 +755,8 @@ def regularizing(reporter):
 
     # does it say L2, and has the user chosen to go ahead with running the code?
     if r in ("L2", "Ridge", "l2", "ridge") and "y" not in answer.lower():
-        # Loop to compute the different values of cross-validation scores
-        max_cross_val_alpha = 1
-        max_cross_val_score = (
-            -1000000000.000
-        )  # making it a super negative number initially
-        for x in range(1, MAX_ALPHA):
-            ridgeModel = Ridge(alpha=x, tol=0.0925)
-            ridgeModel.fit(X, y)
-            scores = cross_val_score(ridgeModel, X, y, cv=10)
-            avg_cross_val_score = mean(scores) * 100
-            # figure out which setting of the regularization parameter results in the max likelihood score
-            if avg_cross_val_score > max_cross_val_score:
-                max_cross_val_alpha = x
-                max_cross_val_score = avg_cross_val_score
-
-        # Building and fitting the Lasso Regression Model
+        max_cross_val_alpha = _best_alpha(Ridge, X, y)
+        # Building and fitting the Ridge Regression Model
         ridgeModelChosen = Ridge(alpha=max_cross_val_alpha, tol=0.0925)
         ridgeModelChosen.fit(X, y)
         reporter.print("\nRidge regression model:")

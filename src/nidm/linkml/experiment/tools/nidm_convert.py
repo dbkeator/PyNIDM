@@ -5,6 +5,17 @@ import click
 from rdflib import Graph, util
 from nidm.linkml.experiment.tools.click_base import cli
 
+# outtype (from the --type click.Choice) -> (file extension, rdflib serialize
+# format, extra serialize kwargs).  Table-driven so each format is one row
+# instead of a near-identical parse/serialize branch.
+_CONVERT_FORMATS = {
+    "turtle": (".ttl", "turtle", {"indent": 4}),
+    "jsonld": (".json", "json-ld", {"indent": 4}),
+    "xml-rdf": (".xml", "pretty-xml", {}),
+    "n3": (".n3", "n3", {}),
+    "trig": (".trig", "trig", {}),
+}
+
 
 # adding click argument parsing
 @cli.command()
@@ -36,34 +47,16 @@ def convert(nidm_file_list, outtype, outdir):
     place as the input file.
     """
 
+    ext, rdf_format, serialize_kwargs = _CONVERT_FORMATS[outtype]
     for nidm_file in nidm_file_list.split(","):
         if outdir:
             outfile = join(outdir, splitext(basename(nidm_file))[0])
         else:
-            outfile = join(splitext(nidm_file)[0])
+            outfile = splitext(nidm_file)[0]
 
-        if outtype == "jsonld":
-            graph = Graph()
-            graph.parse(nidm_file, format=util.guess_format(nidm_file))
-            graph.serialize(outfile + ".json", format="json-ld", indent=4)
-        elif outtype == "turtle":
-            graph = Graph()
-            graph.parse(nidm_file, format=util.guess_format(nidm_file))
-            graph.serialize(outfile + ".ttl", format="turtle", indent=4)
-        elif outtype == "xml-rdf":
-            graph = Graph()
-            graph.parse(nidm_file, format=util.guess_format(nidm_file))
-            graph.serialize(outfile + ".xml", format="pretty-xml")
-        elif outtype == "n3":
-            graph = Graph()
-            graph.parse(nidm_file, format=util.guess_format(nidm_file))
-            graph.serialize(outfile + ".n3", format="n3")
-        elif outtype == "trig":
-            graph = Graph()
-            graph.parse(nidm_file, format=util.guess_format(nidm_file))
-            graph.serialize(outfile + ".trig", format="trig")
-        else:
-            print("Error, type is not supported at this time")
+        graph = Graph()
+        graph.parse(nidm_file, format=util.guess_format(nidm_file))
+        graph.serialize(outfile + ext, format=rdf_format, **serialize_kwargs)
 
 
 if __name__ == "__main__":
