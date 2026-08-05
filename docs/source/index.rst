@@ -45,9 +45,12 @@ legacy wrapper classes under ``nidm.experiment`` (``Project``, ``Session``,
 
 	$ pip install pynidm[legacy]
 
-New code should use ``nidm.linkml.experiment``. The prov-free query, navigation,
-CDE and REST layers (``nidm.experiment.Query`` / ``Navigate`` / ``CDE`` /
-``tools.rest``) continue to import without the extra — they re-export the
+New code should target ``nidm.linkml.experiment``.  Only the prov-toolbox
+wrapper classes (``Project``, ``Session``, ``Acquisition``, ...) need the
+``legacy`` extra; the prov-free query, navigation, CDE, and REST layers are
+still importable from their original ``nidm.experiment`` locations
+(``nidm.experiment.Query`` / ``Navigate`` / ``CDE`` / ``tools.rest``) with a
+plain ``pip install pynidm`` — those names are now thin shims that re-export the
 relocated implementations in ``nidm.linkml``. For architecture, the schema →
 code workflow, and how to extend the model, see the :ref:`developer_manual`.
 
