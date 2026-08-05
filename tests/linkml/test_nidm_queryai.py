@@ -1,4 +1,18 @@
-"""Tests for nidm_queryai helpers that don't require an AI/API call."""
+"""Tests for nidm_queryai helpers that don't require an AI/API call.
+
+Coverage boundary (intentional): ``nidm_queryai`` is an LLM-backed tool -- its
+core question-answering path sends a prompt to an external model and cannot be
+unit-tested deterministically (it is non-deterministic and needs a live API
+key), so the module's overall line coverage is expected to stay low.  What *is*
+tested is everything deterministic around that call: file/directory resolution
+(``-nl`` recursion), data-element extraction from the graph (including coded
+value levels), the ``_looks_analytical`` heuristic, and the deterministic SPARQL
+builder.  The direct-predicate term registry -- the one piece genuinely
+re-implemented from the legacy tool -- is covered separately in
+``test_queryai_direct_predicates.py`` (and diffed against master by
+``scripts/queryai_terms_parity.py``).  The remaining uncovered lines are the
+LLM request/response handling, which is a known and accepted gap.
+"""
 
 from __future__ import annotations
 from pathlib import Path
