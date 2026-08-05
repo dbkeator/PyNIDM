@@ -28,7 +28,7 @@ repos:
         exclude: ^src/nidm/linkml/generated/
 
   - repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
+    rev: 7.1.1
     hooks:
       - id: flake8
         exclude: ^src/nidm/linkml/generated/

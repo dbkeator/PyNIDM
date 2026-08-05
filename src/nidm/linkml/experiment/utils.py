@@ -61,6 +61,13 @@ from ..core.namespaces import (
     SCHEMA,
 )
 
+# ``xsd:complexType`` is used as a sentinel valueType for categorical variables.
+# It is not a defined XSD datatype, so reaching it via ``XSD.complexType`` /
+# ``XSD["complexType"]`` trips rdflib's DefinedNamespace warning ("Code:
+# complexType is not defined in namespace XSD") -- once at import and on every
+# use.  Build the URIRef from the namespace string once and reuse it.
+XSD_COMPLEXTYPE = URIRef(str(XSD) + "complexType")
+
 # ---------------------------------------------------------------------------
 # Interlex / SciCrunch mode constants -- mirror the legacy module-level
 # switches.  Production by default; flip INTERLEX_MODE to "test" before
@@ -869,12 +876,12 @@ def redcap_datadictionary_to_json(redcap_dd_file, assessment_name: str) -> dict:
                 if len(split_choices) == 1:
                     # single-pipe meant no pipe; treat as comma-separated
                     entry["levels"] = []
-                    entry["valueType"] = XSD["complexType"]
+                    entry["valueType"] = XSD_COMPLEXTYPE
                     for choice in row["Choices OR Calculations"].split(","):
                         entry["levels"].append(choice.strip())
                 else:
                     entry["levels"] = {}
-                    entry["valueType"] = XSD["complexType"]
+                    entry["valueType"] = XSD_COMPLEXTYPE
                     for choice in split_choices:
                         key_value = choice.split(",")
                         entry["levels"][str(key_value[0]).strip()] = str(
@@ -1780,7 +1787,7 @@ def define_new_concept(source_variable, ilx_obj):
 # ``annotate_data_element``.  Option 2 is "categorical" -> complexType.
 _DATATYPE_MENU: dict = {
     1: XSD["string"],
-    2: XSD["complexType"],
+    2: XSD_COMPLEXTYPE,
     3: XSD["boolean"],
     4: XSD["integer"],
     5: XSD["float"],
@@ -1911,13 +1918,13 @@ def annotate_data_element(
     # Categorical -> collect choices; scalar -> collect min/max/units.
     term_category: Any = None
     had_numeric_values = False
-    if term_datatype == URIRef(XSD["complexType"]):
+    if term_datatype == XSD_COMPLEXTYPE:
         term_category, had_numeric_values = _prompt_categorical_choices()
 
     entry = source_variable_annotations.setdefault(current_tuple, {})
     response_opts = entry.setdefault("responseOptions", {})
 
-    if term_datatype != URIRef(XSD["complexType"]):
+    if term_datatype != XSD_COMPLEXTYPE:
         term_min = input("Please enter the minimum value [NA]:\t")
         term_max = input("Please enter the maximum value [NA]:\t")
         term_units = input("Please enter the units [NA]:\t")
@@ -1939,7 +1946,7 @@ def annotate_data_element(
     response_opts["valueType"] = term_datatype
     entry["associatedWith"] = "NIDM"
 
-    if term_datatype == URIRef(XSD["complexType"]):
+    if term_datatype == XSD_COMPLEXTYPE:
         response_opts["choices"] = term_category
 
     # Echo the stored mapping back to the user.
@@ -1957,7 +1964,7 @@ def annotate_data_element(
         print("minimumValue:", response_opts["minValue"])
     if "maxValue" in response_opts:
         print("maximumValue:", response_opts["maxValue"])
-    if term_datatype == URIRef(XSD["complexType"]):
+    if term_datatype == XSD_COMPLEXTYPE:
         print("choices:", response_opts["choices"])
     print("-" * 87)
 
