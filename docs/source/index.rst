@@ -380,27 +380,26 @@ Interlex API key you visit `SciCrunch <http://scicrunch.org/nidm-terms>`_,
 register for an account, then click on "MyAccount" and "API Keys" to add a new
 API key for your account.
 
-This converter can be invoked two equivalent ways, with identical flags and
-behavior: the standalone ``bidsmri2nidm`` command, or the ``pynidm bids2nidm``
-subcommand, which places it alongside the other ``pynidm`` tools for a uniform
-interface.  The examples below use the standalone name; run them under the group with
-``pynidm bids2nidm`` (e.g. ``pynidm bids2nidm -d [ROOT BIDS DIRECT]
--bidsignore``) instead.
+The recommended invocation is the ``pynidm bids2nidm`` subcommand, which keeps a
+uniform interface with the other ``pynidm`` tools.  The standalone
+``bidsmri2nidm`` command remains available for backward compatibility and takes
+exactly the same flags — in any example below you may substitute
+``bidsmri2nidm`` for ``pynidm bids2nidm``.
 
 
 .. code:: text
 
-   $ bidsmri2nidm -d [ROOT BIDS DIRECT] -bidsignore
+   $ pynidm bids2nidm -d [ROOT BIDS DIRECT] -bidsignore
 
    # Write one NIDM file per subject as BIDS_ROOT/sub-<id>/nidm.ttl:
-   $ bidsmri2nidm -d [ROOT BIDS DIRECT] --per_subject
+   $ pynidm bids2nidm -d [ROOT BIDS DIRECT] --per_subject
 
    # Or direct the per-subject files under a different base output directory:
-   $ bidsmri2nidm -d [ROOT BIDS DIRECT] --per_subject -o [OUTPUT DIRECTORY]
+   $ pynidm bids2nidm -d [ROOT BIDS DIRECT] --per_subject -o [OUTPUT DIRECTORY]
 
-   usage: bidsmri2nidm [-h] -d DIRECTORY [-jsonld] [-bidsignore] [-no_concepts]
-                    [-json_map JSON_MAP] [-log LOGFILE] [-o OUTPUTFILE]
-                    [-per_subject]
+   usage: pynidm bids2nidm [-h] -d DIRECTORY [-jsonld] [-bidsignore]
+                           [-no_concepts] [-json_map JSON_MAP] [-log LOGFILE]
+                           [-o OUTPUTFILE] [-per_subject]
 
    This program will represent a BIDS MRI dataset as a NIDM RDF document and provide user with opportunity to annotate
    the dataset (i.e. create sidecar files) and associate selected variables with broader concepts to make datasets more
@@ -447,17 +446,16 @@ API key.  To get an Interlex API key you visit `SciCrunch
 <http://scicrunch.org/nidm-terms>`_, register for an account, then click on
 "MyAccount" and "API Keys" to add a new API key for your account.
 
-This converter can be invoked two equivalent ways, with identical flags and
-behavior: the standalone ``csv2nidm`` command, or the ``pynidm csv2nidm``
-subcommand, which places it alongside the other ``pynidm`` tools for a uniform
-interface (e.g. ``pynidm csv2nidm -csv data.csv -json_map map.json -out
-out.ttl``).
+The recommended invocation is the ``pynidm csv2nidm`` subcommand, which keeps a
+uniform interface with the other ``pynidm`` tools (e.g. ``pynidm csv2nidm -csv
+data.csv -json_map map.json -out out.ttl``).  The standalone ``csv2nidm`` command
+remains available for backward compatibility and takes exactly the same flags.
 
 .. code:: bash
 
-  usage: csv2nidm [-h] -csv CSV_FILE [-json_map JSON_MAP | -redcap REDCAP]
-                  [-nidm NIDM_FILE] [-no_concepts] [-log LOGFILE] -out
-                  OUTPUT_FILE
+  usage: pynidm csv2nidm [-h] -csv CSV_FILE
+                         [-json_map JSON_MAP | -redcap REDCAP] [-nidm NIDM_FILE]
+                         [-no_concepts] [-log LOGFILE] -out OUTPUT_FILE
 
   This program will load in a CSV file and iterate over the header variable
   names performing an elastic search of https://scicrunch.org/ for NIDM-ReproNim
