@@ -18,6 +18,29 @@ A Python library to manipulate the `Neuroimaging Data Model <http://nidm.nidash.
 .. contents::
 .. section-numbering::
 
+Documentation
+=============
+
+Full documentation is published on `ReadTheDocs
+<https://pynidm.readthedocs.io/en/latest/>`_ and built from the reStructuredText
+sources under ``docs/source/`` (the single source of truth):
+
+* **User Manual** — https://pynidm.readthedocs.io/en/latest/ — installation, the
+  NIDM data model (graph hierarchy, participant linkage, data elements), and
+  every ``pynidm`` command-line tool (converting data, querying with SPARQL and
+  the AI-assisted ``queryai``, visualization, merging, and linear regression),
+  with worked examples.  Source: ``docs/source/index.rst``.
+* **Developer Manual** —
+  https://pynidm.readthedocs.io/en/latest/developer_manual.html — the
+  schema-driven, RDFLib-native architecture: how the LinkML schema generates the
+  code, the package layout, how to change the model or add a CLI tool, testing,
+  and migrating from the legacy prov-toolbox API.  Source:
+  ``docs/source/developer_manual.rst``.
+
+The ``USER_MANUAL.md`` and ``DEVELOPER_MANUAL.md`` files at the repository root
+are short pointers to these two manuals — edit the ``.rst`` sources under
+``docs/source/`` rather than the stubs.
+
 Dependencies
 ============
 * `Git-annex <https://git-annex.branchable.com/install/>`_
@@ -47,6 +70,34 @@ New code should use ``nidm.linkml.experiment`` instead. The prov-free query,
 navigation, CDE and REST layers (``nidm.experiment.Query`` /
 ``Navigate`` / ``CDE`` / ``tools.rest``) continue to import without the extra --
 they now re-export the relocated implementations in ``nidm.linkml``.
+
+Architecture at a glance
+========================
+
+PyNIDM is **schema-driven**: the NIDM-Experiment data model is described once, in
+a `LinkML <https://linkml.io>`_ schema, and everything else is derived from it::
+
+   LinkML schema (nidm_schema.yaml)            <- single source of truth
+     |  python scripts/regen_schema.py
+   Generated Pydantic classes                  (src/nidm/linkml/generated/)
+     |  wrapped by
+   Wrapper classes (Project, Session, ...)     (src/nidm/linkml/experiment/)
+     |  used by
+   CLI tools (pynidm query, csv2nidm, ...)     (src/nidm/linkml/experiment/tools/)
+
+The maintained implementation lives under ``src/nidm/linkml/`` and is built
+directly on `rdflib <https://rdflib.readthedocs.io>`_: the wrapper classes emit a
+plain ``rdflib.Graph``, so the graph *is* the data — there is no separate document
+model to keep in sync, and a class, its slot, and the RDF predicate it maps to are
+all declared once in the schema.  New code should target
+``nidm.linkml.experiment``; the earlier prov-toolbox implementation under
+``src/nidm/experiment`` remains available as the optional ``pynidm[legacy]``
+extra.
+
+For the full walkthrough — the wrapper engine, the query layer, how to change the
+model or add a CLI tool, testing, and the legacy-migration guide — see the
+`Developer Manual
+<https://pynidm.readthedocs.io/en/latest/developer_manual.html>`_.
 
 Contributing to the Software
 =============================
