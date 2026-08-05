@@ -9,6 +9,7 @@ Subcommands are added here as each legacy tool is ported to the LinkML
 toolset (task 8).
 """
 from nidm.linkml.experiment.tools import (  # noqa: F401
+    converter_cli,
     nidm_concat,
     nidm_convert,
     nidm_linreg,

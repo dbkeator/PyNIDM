@@ -944,15 +944,21 @@ def csv2nidm_project(
 # ---------------------------------------------------------------------------
 
 
-def _build_arg_parser() -> ArgumentParser:
-    """Construct the argparse parser for the csv2nidm CLI."""
+def _build_arg_parser(prog: Optional[str] = None) -> ArgumentParser:
+    """Construct the argparse parser for the csv2nidm CLI.
+
+    *prog* overrides the program name shown in usage/help; the ``pynidm
+    csv2nidm`` passthrough passes ``"pynidm csv2nidm"`` so the usage line reflects
+    the subcommand, while the standalone script keeps its default (``csv2nidm``).
+    """
     parser = ArgumentParser(
+        prog=prog,
         description=(
             "Load a CSV / TSV file, optionally map its variables to NIDM/InterLex "
             "concepts via -json_map / -csv_map / -redcap, and write the result as "
             "a NIDM RDF file.  When -nidm is supplied (Phase B), data is appended "
             "to an existing NIDM file instead of creating a new one."
-        )
+        ),
     )
     parser.add_argument(
         "-csv", dest="csv_file", required=True, help="Full path to CSV file to convert"
@@ -1218,7 +1224,7 @@ def csv2nidm_derivative_project(
     return project, cde
 
 
-def csv2nidm_main(argv: Optional[list] = None) -> int:
+def csv2nidm_main(argv: Optional[list] = None, prog: Optional[str] = None) -> int:
     """CLI entry point: dispatch to one of the four conversion paths.
 
     Based on the supplied flags, routes to:
@@ -1229,7 +1235,7 @@ def csv2nidm_main(argv: Optional[list] = None) -> int:
 
     Returns the process exit code (0 on success).
     """
-    parser = _build_arg_parser()
+    parser = _build_arg_parser(prog=prog)
     args = parser.parse_args(argv)
 
     if args.nidm_file is None and args.output_file is None:

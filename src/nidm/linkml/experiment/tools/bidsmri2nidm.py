@@ -1103,9 +1103,16 @@ def bidsmri2project(
 # ---------------------------------------------------------------------------
 
 
-def _build_arg_parser() -> ArgumentParser:
-    """Construct the argparse parser for the bidsmri2nidm CLI."""
+def _build_arg_parser(prog: Optional[str] = None) -> ArgumentParser:
+    """Construct the argparse parser for the bidsmri2nidm CLI.
+
+    *prog* overrides the program name shown in usage/help; the ``pynidm
+    bids2nidm`` passthrough passes ``"pynidm bids2nidm"`` so the usage line
+    reflects the subcommand, while the standalone script keeps its default
+    (``bidsmri2nidm``).
+    """
     parser = ArgumentParser(
+        prog=prog,
         description=(
             "Represent a BIDS dataset as a NIDM RDF document.  When -no_concepts "
             "is not set, the user is interactively prompted to map participants.tsv "
@@ -1214,7 +1221,7 @@ def _list_subjects(directory) -> List[str]:
     return subjects
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: Optional[list] = None, prog: Optional[str] = None) -> int:
     """CLI entry point: convert a BIDS dataset to NIDM turtle.
 
     Two output paths: the default single-file mode writes one NIDM graph
@@ -1225,7 +1232,7 @@ def main(argv: Optional[list] = None) -> int:
 
     Returns the process exit code (0 on success).
     """
-    parser = _build_arg_parser()
+    parser = _build_arg_parser(prog=prog)
     args = parser.parse_args(argv)
     directory = args.directory
 
