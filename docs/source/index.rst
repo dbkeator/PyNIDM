@@ -380,6 +380,13 @@ Interlex API key you visit `SciCrunch <http://scicrunch.org/nidm-terms>`_,
 register for an account, then click on "MyAccount" and "API Keys" to add a new
 API key for your account.
 
+This converter can be invoked two equivalent ways, with identical flags and
+behavior: the standalone ``bidsmri2nidm`` command, or the ``pynidm bids2nidm``
+subcommand, which places it alongside the other ``pynidm`` tools for a uniform
+interface.  The examples below use the standalone name; run them under the group with
+``pynidm bids2nidm`` (e.g. ``pynidm bids2nidm -d [ROOT BIDS DIRECT]
+-bidsignore``) instead.
+
 
 .. code:: text
 
@@ -439,6 +446,12 @@ this tool please set your INTERLEX_API_KEY environment variable to your unique
 API key.  To get an Interlex API key you visit `SciCrunch
 <http://scicrunch.org/nidm-terms>`_, register for an account, then click on
 "MyAccount" and "API Keys" to add a new API key for your account.
+
+This converter can be invoked two equivalent ways, with identical flags and
+behavior: the standalone ``csv2nidm`` command, or the ``pynidm csv2nidm``
+subcommand, which places it alongside the other ``pynidm`` tools for a uniform
+interface (e.g. ``pynidm csv2nidm -csv data.csv -json_map map.json -out
+out.ttl``).
 
 .. code:: bash
 
