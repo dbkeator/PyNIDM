@@ -25,6 +25,96 @@ from nidm.linkml.experiment.tools.nidm_file_utils import (
 from nidm.linkml.experiment.tools.rest import RestParser
 
 
+# --------------------------------------------------------------------------- #
+# per-mode query handlers (the CLI `query()` below is a thin router over these)
+# --------------------------------------------------------------------------- #
+def _write_or_print(df, output_file):
+    """Write *df* to CSV if *output_file* is given, otherwise print it."""
+    if output_file is not None:
+        df.to_csv(output_file)
+    else:
+        print(df.to_string())
+
+
+def _q_participants(files, output_file):
+    df = GetParticipantIDs(files, output_file=output_file)
+    if output_file is None:
+        print(df.to_string())
+    return df
+
+
+def _q_project_frames(files, output_file, per_project):
+    """Concat *per_project*(files, project_id) over every project, then emit.
+
+    (pandas >=2.0 removed DataFrame.append; build a list and pd.concat -- this
+    also yields an empty frame instead of crashing when there are no
+    projects/instruments, e.g. a pure FreeSurfer-derivative NIDM file.)
+    """
+    project_list = GetProjectsUUID(files)
+    frames = [per_project(files, project_id=p) for p in project_list]
+    df = pd.concat(frames) if frames else pd.DataFrame()
+    _write_or_print(df, output_file)
+
+
+def _q_dataelements(nidm_file_list, output_file):
+    _write_or_print(GetDataElements(nidm_file_list=nidm_file_list), output_file)
+
+
+def _q_dataelements_brainvols(nidm_file_list, output_file):
+    _write_or_print(
+        GetBrainVolumeDataElements(nidm_file_list=nidm_file_list), output_file
+    )
+
+
+def _q_brainvols(nidm_file_list, output_file):
+    _write_or_print(GetBrainVolumes(nidm_file_list=nidm_file_list), output_file)
+
+
+def _q_fields(nidm_file_list, get_fields, output_file, verbosity):
+    # fields-only query, done via the REST API per nidm file
+    restParser = RestParser(verbosity_level=int(verbosity))
+    if output_file is not None:
+        restParser.setOutputFormat(RestParser.OBJECT_FORMAT)
+        df_list = []
+    else:
+        restParser.setOutputFormat(RestParser.CLI_FORMAT)
+    for nidm_file in nidm_file_list.split(","):
+        project = GetProjectsUUID([nidm_file])
+        uri = "/projects/" + str(project[0]).split("/")[-1] + "?fields=" + get_fields
+        if output_file is None:
+            print(restParser.run([nidm_file], uri))
+        else:
+            df_list.append(pd.DataFrame(restParser.run([nidm_file], uri)))
+    if output_file is not None:
+        pd.concat(df_list).to_csv(output_file)
+
+
+def _q_uri(files, uri, output_file, j, verbosity):
+    restParser = RestParser(verbosity_level=int(verbosity))
+    if j:
+        restParser.setOutputFormat(RestParser.JSON_FORMAT)
+    elif output_file is not None:
+        restParser.setOutputFormat(RestParser.OBJECT_FORMAT)
+    else:
+        restParser.setOutputFormat(RestParser.CLI_FORMAT)
+    df = restParser.run(files, uri)
+    if output_file is not None:
+        if j:
+            with open(output_file, "w+", encoding="utf-8") as f:
+                f.write(dumps(df))
+        else:
+            pd.DataFrame(df).to_csv(output_file)
+    else:
+        print(df)
+
+
+def _q_sparql(files, query_file, output_file):
+    df = sparql_query_nidm(files, query_file.read(), output_file)
+    if output_file is None:
+        print(df.to_string())
+    return df
+
+
 @cli.command()
 @click.option(
     "--nidm_file_list",
@@ -171,124 +261,27 @@ def query(
         os.environ["BLAZEGRAPH_URL"] = blaze
         print(f"setting BLAZEGRAPH_URL to {blaze}")
 
+    # Exactly one query-type option is set (RequiredMutuallyExclusiveOptionGroup),
+    # so this is a straight router over the per-mode handlers defined above.
+    files = nidm_file_list.split(",")
     if get_participants:
-        df = GetParticipantIDs(nidm_file_list.split(","), output_file=output_file)
-        if (output_file) is None:
-            print(df.to_string())
-
-        return df
+        return _q_participants(files, output_file)
     elif get_instruments:
-        # get all project UUIDs, then concat each project's instruments.
-        # (pandas >=2.0 removed DataFrame.append; build a list and pd.concat --
-        # this also yields an empty frame instead of crashing when there are no
-        # projects/instruments, e.g. a pure FreeSurfer-derivative NIDM file.)
-        project_list = GetProjectsUUID(nidm_file_list.split(","))
-        frames = [
-            GetProjectInstruments(nidm_file_list.split(","), project_id=project)
-            for project in project_list
-        ]
-        df = pd.concat(frames) if frames else pd.DataFrame()
-
-        # write dataframe
-        # if output file parameter specified
-        if output_file is not None:
-            df.to_csv(output_file)
-        else:
-            print(df.to_string())
+        _q_project_frames(files, output_file, GetProjectInstruments)
     elif get_instrument_vars:
-        # get all project UUIDs, then concat each project's instrument variables.
-        # (pandas >=2.0 removed DataFrame.append; build a list and pd.concat --
-        # also yields an empty frame instead of crashing when there are none.)
-        project_list = GetProjectsUUID(nidm_file_list.split(","))
-        frames = [
-            GetInstrumentVariables(nidm_file_list.split(","), project_id=project)
-            for project in project_list
-        ]
-        df = pd.concat(frames) if frames else pd.DataFrame()
-
-        # write dataframe
-        # if output file parameter specified
-        if output_file is not None:
-            df.to_csv(output_file)
-        else:
-            print(df.to_string())
+        _q_project_frames(files, output_file, GetInstrumentVariables)
     elif get_dataelements:
-        datael = GetDataElements(nidm_file_list=nidm_file_list)
-        # if output file parameter specified
-        if output_file is not None:
-            datael.to_csv(output_file)
-        else:
-            print(datael.to_string())
+        _q_dataelements(nidm_file_list, output_file)
     elif get_fields:
-        # fields only query.  We'll do it with the rest api
-        restParser = RestParser(verbosity_level=int(verbosity))
-        if output_file is not None:
-            restParser.setOutputFormat(RestParser.OBJECT_FORMAT)
-            df_list = []
-        else:
-            restParser.setOutputFormat(RestParser.CLI_FORMAT)
-        # set up uri to do fields query for each nidm file
-        for nidm_file in nidm_file_list.split(","):
-            # get project UUID
-            project = GetProjectsUUID([nidm_file])
-            uri = (
-                "/projects/" + str(project[0]).split("/")[-1] + "?fields=" + get_fields
-            )
-            # get fields output from each file and concatenate
-            if output_file is None:
-                # just print results
-                print(restParser.run([nidm_file], uri))
-            else:
-                df_list.append(pd.DataFrame(restParser.run([nidm_file], uri)))
-
-        if output_file is not None:
-            # concatenate data frames
-            df = pd.concat(df_list)
-            # output to csv file
-            df.to_csv(output_file)
-
+        _q_fields(nidm_file_list, get_fields, output_file, verbosity)
     elif uri:
-        restParser = RestParser(verbosity_level=int(verbosity))
-        if j:
-            restParser.setOutputFormat(RestParser.JSON_FORMAT)
-        elif output_file is not None:
-            restParser.setOutputFormat(RestParser.OBJECT_FORMAT)
-        else:
-            restParser.setOutputFormat(RestParser.CLI_FORMAT)
-        df = restParser.run(nidm_file_list.split(","), uri)
-        if output_file is not None:
-            if j:
-                with open(output_file, "w+", encoding="utf-8") as f:
-                    f.write(dumps(df))
-            else:
-                # convert object df to dataframe and output
-                pd.DataFrame(df).to_csv(output_file)
-        else:
-            print(df)
-
+        _q_uri(files, uri, output_file, j, verbosity)
     elif get_dataelements_brainvols:
-        brainvol = GetBrainVolumeDataElements(nidm_file_list=nidm_file_list)
-        # if output file parameter specified
-        if output_file is not None:
-            brainvol.to_csv(output_file)
-        else:
-            print(brainvol.to_string())
+        _q_dataelements_brainvols(nidm_file_list, output_file)
     elif get_brainvols:
-        brainvol = GetBrainVolumes(nidm_file_list=nidm_file_list)
-        # if output file parameter specified
-        if output_file is not None:
-            brainvol.to_csv(output_file)
-        else:
-            print(brainvol.to_string())
+        _q_brainvols(nidm_file_list, output_file)
     elif query_file:
-        df = sparql_query_nidm(
-            nidm_file_list.split(","), query_file.read(), output_file
-        )
-
-        if (output_file) is None:
-            print(df.to_string())
-
-        return df
+        return _q_sparql(files, query_file, output_file)
     else:
         print("ERROR: No query parameter provided.  See help:")
         print()

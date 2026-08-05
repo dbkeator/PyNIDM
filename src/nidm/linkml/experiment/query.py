@@ -768,7 +768,6 @@ def GetParticipantIDFromAcquisition(nidm_file_list, acquisition, output_file=Non
             PREFIX sio: <http://semanticscience.org/ontology/sio.owl#>
             PREFIX ndar: <https://ndar.nih.gov/api/datadictionary/v2/dataelement/>
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-            PREFIX prov:<http://www.w3.org/ns/prov#>
 
             SELECT DISTINCT ?uuid ?ID
             WHERE {{

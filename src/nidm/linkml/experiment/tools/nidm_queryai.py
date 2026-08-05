@@ -1099,6 +1099,131 @@ def _format_results(results):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_concepts_to_vars(concepts, data_elements):
+    """Resolve extracted *concepts* to query-variable descriptors.
+
+    For each concept: identifier/aggregate/software roles pass through without
+    DataElement resolution; otherwise resolve to a DataElement URI (by name,
+    then keywords), falling back to the direct-predicate registry
+    (task/session/run/filename/...).  Multiple matches prompt the user to pick,
+    and multiple chosen DEs for one concept get distinct names.  Returns the
+    list of resolved-variable dicts.
+    """
+    resolved_vars = []
+    for concept in concepts:
+        name = concept.get("name", "unknown")
+        role = concept.get("role", "other")
+
+        # Roles that never need DataElement resolution:
+        #  - "identifier": subject ID, handled by ndar:src_subject_id
+        #  - "aggregate": COUNT/AVG/etc. — operations, not data variables
+        #  - "software": tools (FreeSurfer, FSL, ANTs) are SoftwareAgents
+        #    identified via nidm:NIDM_0000164, not DataElements
+        if role in ("identifier", "aggregate", "software"):
+            if role == "software":
+                click.echo(
+                    f"  '{name}' is a software tool; handled by "
+                    f"SoftwareAgent query pattern.",
+                    err=True,
+                )
+            resolved_vars.append(
+                {
+                    "name": name,
+                    "role": role,
+                    "qname": None,
+                    "uri": None,
+                }
+            )
+            continue
+
+        click.echo(f"  Resolving '{name}'...", err=True)
+        matches = _resolve_concept(name, data_elements, concept_hints=concept)
+
+        if not matches:
+            # Try with individual keywords
+            for kw in concept.get("keywords", []):
+                matches = _resolve_concept(kw, data_elements)
+                if matches:
+                    break
+
+        if not matches:
+            # Not a DataElement -- try the direct-predicate registry.  Terms
+            # like task / session / run / filename / scan metadata are stored
+            # as predicates on the acquisition object (nidm:Task,
+            # bids:session_number, ...), not as DataElement nodes, so they
+            # never appear in `data_elements`.
+            direct = resolve_query_term(name)
+            if direct is None:
+                for kw in concept.get("keywords", []):
+                    direct = resolve_query_term(kw)
+                    if direct:
+                        break
+            if direct is not None:
+                click.echo(
+                    f"  Found direct NIDM predicate: {direct['qname']}",
+                    err=True,
+                )
+                resolved_vars.append(
+                    {
+                        "name": name,
+                        "role": role,
+                        "qname": direct["qname"],
+                        "uri": direct["uri"],
+                        "label": None,
+                        # marks this as a predicate on an entity (queried
+                        # directly) rather than a DataElement value.
+                        "direct_predicate": True,
+                    }
+                )
+                continue
+
+        if not matches:
+            click.echo(
+                f"  WARNING: No DataElement found for '{name}'. "
+                f"This variable will be omitted from the query.",
+                err=True,
+            )
+            continue
+        elif len(matches) == 1:
+            selected_list = [matches[0]]
+            click.echo(
+                f"  Found: {matches[0].get('qname', matches[0]['uri'])} "
+                f"(label=\"{matches[0].get('label', 'N/A')}\")",
+                err=True,
+            )
+        else:
+            selected_list = _ask_user_to_pick(name, matches)
+            if selected_list is None:
+                click.echo(f"  Skipping '{name}'.", err=True)
+                continue
+
+        for selected in selected_list:
+            # When multiple DEs are chosen for the same concept, give each a
+            # distinct name so the AI creates separate SPARQL variables
+            # (e.g. left_hippocampus_volume_fs, left_hippocampus_volume_ants).
+            if len(selected_list) > 1:
+                suffix = selected.get("qname", "").split(":")[0]
+                var_name = f"{name} ({suffix})"
+            else:
+                var_name = name
+
+            resolved_vars.append(
+                {
+                    "name": var_name,
+                    "role": role,
+                    "qname": selected.get("qname", selected["uri"]),
+                    "uri": selected["uri"],
+                    "label": selected.get("label"),
+                    "laterality": selected.get("laterality"),
+                    "unit": selected.get("unit"),
+                    # value levels (coded -> label), if defined in the data;
+                    # the ONLY licensed source for a coded-value mapping
+                    "levels": selected.get("levels"),
+                }
+            )
+    return resolved_vars
+
+
 @cli.command()
 @click.option(
     "--nidm_file_list",
@@ -1223,120 +1348,8 @@ def queryai(nidm_file_list, with_cdes, question, output_file, show_query, mode):
             # Fall back to a simple prompt with all personal DEs listed
             concepts = []
 
-        # Resolve each concept to a DataElement URI
-        resolved_vars = []
-        for concept in concepts:
-            name = concept.get("name", "unknown")
-            role = concept.get("role", "other")
-
-            # Roles that never need DataElement resolution:
-            #  - "identifier": subject ID, handled by ndar:src_subject_id
-            #  - "aggregate": COUNT/AVG/etc. — operations, not data variables
-            #  - "software": tools (FreeSurfer, FSL, ANTs) are SoftwareAgents
-            #    identified via nidm:NIDM_0000164, not DataElements
-            if role in ("identifier", "aggregate", "software"):
-                if role == "software":
-                    click.echo(
-                        f"  '{name}' is a software tool; handled by "
-                        f"SoftwareAgent query pattern.",
-                        err=True,
-                    )
-                resolved_vars.append(
-                    {
-                        "name": name,
-                        "role": role,
-                        "qname": None,
-                        "uri": None,
-                    }
-                )
-                continue
-
-            click.echo(f"  Resolving '{name}'...", err=True)
-            matches = _resolve_concept(name, data_elements, concept_hints=concept)
-
-            if not matches:
-                # Try with individual keywords
-                for kw in concept.get("keywords", []):
-                    matches = _resolve_concept(kw, data_elements)
-                    if matches:
-                        break
-
-            if not matches:
-                # Not a DataElement -- try the direct-predicate registry.  Terms
-                # like task / session / run / filename / scan metadata are stored
-                # as predicates on the acquisition object (nidm:Task,
-                # bids:session_number, ...), not as DataElement nodes, so they
-                # never appear in `data_elements`.
-                direct = resolve_query_term(name)
-                if direct is None:
-                    for kw in concept.get("keywords", []):
-                        direct = resolve_query_term(kw)
-                        if direct:
-                            break
-                if direct is not None:
-                    click.echo(
-                        f"  Found direct NIDM predicate: {direct['qname']}",
-                        err=True,
-                    )
-                    resolved_vars.append(
-                        {
-                            "name": name,
-                            "role": role,
-                            "qname": direct["qname"],
-                            "uri": direct["uri"],
-                            "label": None,
-                            # marks this as a predicate on an entity (queried
-                            # directly) rather than a DataElement value.
-                            "direct_predicate": True,
-                        }
-                    )
-                    continue
-
-            if not matches:
-                click.echo(
-                    f"  WARNING: No DataElement found for '{name}'. "
-                    f"This variable will be omitted from the query.",
-                    err=True,
-                )
-                continue
-            elif len(matches) == 1:
-                selected_list = [matches[0]]
-                click.echo(
-                    f"  Found: {matches[0].get('qname', matches[0]['uri'])} "
-                    f"(label=\"{matches[0].get('label', 'N/A')}\")",
-                    err=True,
-                )
-            else:
-                selected_list = _ask_user_to_pick(name, matches)
-                if selected_list is None:
-                    click.echo(f"  Skipping '{name}'.", err=True)
-                    continue
-
-            for selected in selected_list:
-                # When multiple DEs are chosen for the same concept,
-                # give each a distinct name so the AI creates separate
-                # SPARQL variables (e.g. left_hippocampus_volume_fs,
-                # left_hippocampus_volume_ants).
-                if len(selected_list) > 1:
-                    suffix = selected.get("qname", "").split(":")[0]
-                    var_name = f"{name} ({suffix})"
-                else:
-                    var_name = name
-
-                resolved_vars.append(
-                    {
-                        "name": var_name,
-                        "role": role,
-                        "qname": selected.get("qname", selected["uri"]),
-                        "uri": selected["uri"],
-                        "label": selected.get("label"),
-                        "laterality": selected.get("laterality"),
-                        "unit": selected.get("unit"),
-                        # value levels (coded -> label), if defined in the data;
-                        # the ONLY licensed source for a coded-value mapping
-                        "levels": selected.get("levels"),
-                    }
-                )
+        # Resolve each extracted concept to a query variable.
+        resolved_vars = _resolve_concepts_to_vars(concepts, data_elements)
 
         # Show resolved variables
         click.echo("\nResolved variables:", err=True)
