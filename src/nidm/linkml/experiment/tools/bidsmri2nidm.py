@@ -449,7 +449,12 @@ def _process_participant_row(
     """
     participant_id = row["participant_id"]
     subjid = _parse_subjid(participant_id)
-    if subject_filter is not None and subjid != subject_filter:
+    # Leading-zero-tolerant match: ABIDE-style participants.tsv ids are often
+    # un-padded ("51456") while the BIDS directory label / --per_subject filter
+    # is zero-padded ("0051456").  Without this, per-subject mode skips every
+    # participant row and drops the participants.tsv assessment acquisition.
+    # (The imaging walk already normalizes ids the same way.)
+    if subject_filter is not None and subjid.lstrip("0") != subject_filter.lstrip("0"):
         return None
 
     _log.info(subjid)
@@ -1081,10 +1086,14 @@ def bidsmri2project(
                     img_session=img_session,
                 )
         else:
-            session = sessions_by_subj.get(bare_id)
-            if session is None:
-                session = Session(project)
-                sessions_by_subj[bare_id] = session
+            # Imaging gets its OWN nidm:Session, distinct from the
+            # participants.tsv assessment session created in
+            # _process_participant_row.  Legacy bidsmri2nidm models these as two
+            # separate Session activities per subject; reusing the assessment
+            # session here (an exact-key lookup that hit only when the tsv id and
+            # BIDS label happened to match, e.g. "sub-01") merged them and dropped
+            # one nidm:Session vs legacy -- caught by the bidsmri2nidm parity gate.
+            session = Session(project)
             addimagingsessions(
                 bids_layout=bids_layout,
                 bare_id=bare_id,

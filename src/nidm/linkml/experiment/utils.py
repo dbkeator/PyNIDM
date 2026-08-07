@@ -338,8 +338,16 @@ def add_git_annex_sources(obj, bids_root, filepath: Optional[str] = None) -> int
         return 0
 
     try:
+        # Normalize both the repo root and the queried file to their real paths.
+        # pybids can hand us an unresolved file path while the caller resolved the
+        # BIDS root; if the dataset lives under a symlinked path (e.g. an HPC
+        # automount like /orcd/...), that mismatch makes git-annex's whereis lookup
+        # miss and silently drop the prov:Location source URLs.  realpath on both
+        # keeps the repo root and the file path consistent.
+        bids_root = os.path.realpath(bids_root)
         repo = AnnexRepo(bids_root, create=False)
         if filepath is not None:
+            filepath = os.path.realpath(filepath)
             sources = repo.get_urls(filepath)
             matches = [s for s in sources if os.path.basename(filepath) in s]
         else:

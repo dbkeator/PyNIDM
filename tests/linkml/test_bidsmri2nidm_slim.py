@@ -299,6 +299,39 @@ def test_person_carries_subject_id(tmp_path: Path):
     assert [str(i) for i in ids] == ["0050002"]
 
 
+def test_per_subject_keeps_participants_tsv_with_leading_zero_mismatch(tmp_path: Path):
+    """Regression (--per_subject): ABIDE-style ``participants.tsv`` ids are often
+    un-padded (``51456``) while the BIDS subject directory / per-subject filter is
+    zero-padded (``0051456``).  The leading-zero-tolerant match must still process
+    the participant row, so the participants.tsv assessment acquisition
+    (``nfo:filename bids::participants.tsv`` + ``onli:assessment-instrument``
+    typing) is NOT dropped from per-subject output.
+
+    Before the fix, ``subjid ("51456") != subject_filter ("0051456")`` skipped
+    every row and the whole participants.tsv provenance vanished in per-subject
+    mode (single-file mode was unaffected).
+    """
+    _write_dataset_description(tmp_path)
+    _write_t1w_scan(tmp_path, subject="sub-0051456")  # zero-padded BIDS directory
+    (tmp_path / "participants.tsv").write_text(
+        "participant_id\tsex\n51456\tM\n"  # un-padded id, ABIDE-style
+    )
+
+    # subject_filter is the padded BIDS label, exactly as main() passes it in
+    # --per_subject mode; args=None keeps this hermetic (no concept mapping).
+    project, _, _, _ = bidsmri2project(tmp_path, subject_filter="0051456")
+    g = project.graph
+
+    filenames = [str(o) for o in g.objects(None, NFO.filename)]
+    assert any(
+        "participants.tsv" in f for f in filenames
+    ), f"participants.tsv provenance dropped in per-subject mode: {filenames}"
+
+    assert list(
+        g.subjects(RDF.type, _ASSESSMENT_OBJECT_TYPE)
+    ), "participants.tsv AssessmentObject (onli:assessment-instrument) missing"
+
+
 # ---------------------------------------------------------------------------
 # Multiple subjects
 # ---------------------------------------------------------------------------
@@ -571,16 +604,22 @@ def test_participants_tsv_subject_filter_only_processes_matching_row(tmp_path: P
     assert len(aos) == 1
 
 
-def test_participants_tsv_session_is_reused_by_imaging_walk(tmp_path: Path):
-    """The imaging walk should reuse the Session created by
-    participants.tsv (so we end up with one Session per subject, not two)."""
+def test_participants_tsv_and_imaging_use_separate_sessions(tmp_path: Path):
+    """Imaging gets its OWN nidm:Session, separate from the participants.tsv
+    assessment Session -- TWO Sessions per subject, matching legacy
+    bidsmri2nidm (enforced by the legacy-vs-linkml parity gate).
+
+    An earlier version of the linkml port consolidated these into a single
+    Session, which diverged from legacy output whenever the participants.tsv id
+    exactly matched the BIDS subject label; strict legacy parity requires two.
+    """
     _write_dataset_description(tmp_path)
     _write_t1w_scan(tmp_path, subject="sub-01")
     _write_participants_tsv(tmp_path, [{"participant_id": "sub-01", "age": "25"}])
     project = _build_project(tmp_path)
     g = project.graph
     sessions = list(g.subjects(RDF.type, NIDM.Session))
-    assert len(sessions) == 1
+    assert len(sessions) == 2
 
 
 def test_participants_tsv_links_person_via_qualified_association(tmp_path: Path):

@@ -37,6 +37,14 @@ import sys
 import tempfile
 import time
 
+# The typed-shape comparator lives in ``scripts/parity_compare.py``.  Import it
+# whether this module is run from the repo root (``python scripts/regen_...``,
+# where ``scripts/`` is on ``sys.path[0]``) or imported as ``scripts.regen_...``.
+try:
+    from scripts.parity_compare import _pred_local, typed_shape
+except ImportError:  # pragma: no cover -- run-from-repo-root path
+    from parity_compare import _pred_local, typed_shape
+
 LEGACY_MODULE = "nidm.experiment.tools.bidsmri2nidm"
 
 
@@ -54,30 +62,44 @@ def find_sites(bids_root: Path, only=None):
     return sites
 
 
-def run_converter(module_or_cmd, bids_dir: Path, json_map: str, out_ttl: Path):
+def run_converter(
+    module_or_cmd, bids_dir: Path, json_map: str, out: Path, per_subject: bool = False
+):
     """Run a bidsmri2nidm converter; return (returncode, elapsed_seconds, tail).
 
     *module_or_cmd* is either the console-script name ``"bidsmri2nidm"`` (the
-    shipped LinkML tool) or a ``"-m <module>"`` spec for the legacy tool.
+    shipped LinkML tool) or a module name run via ``-m`` (the legacy tool).
+    When *per_subject* is set, ``-o`` is an output DIRECTORY (one
+    ``sub-<id>/nidm.ttl`` per subject) and ``--per_subject`` is passed.
+
+    Any sidecar the converter writes into *bids_dir* (e.g. the
+    ``nidm_annotations.json`` map_variables_to_terms drops there) is removed
+    afterward, so a subsequent run on the same input starts pristine and can't
+    inherit the first tool's artifact -- which would otherwise show up as a false
+    A/B divergence.
     """
-    out_ttl.parent.mkdir(parents=True, exist_ok=True)
+    bids_dir = Path(bids_dir)
+    if per_subject:
+        out.mkdir(parents=True, exist_ok=True)
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
     if module_or_cmd == "bidsmri2nidm":
         cmd = ["bidsmri2nidm"]
     else:
         cmd = [sys.executable, "-m", module_or_cmd]
-    cmd += [
-        "-d",
-        str(bids_dir),
-        "-json_map",
-        json_map,
-        "-no_concepts",
-        "-o",
-        str(out_ttl),
-    ]
+    cmd += ["-d", str(bids_dir), "-json_map", json_map, "-no_concepts", "-o", str(out)]
+    if per_subject:
+        cmd.append("--per_subject")
 
+    before = {p.name for p in bids_dir.iterdir()}
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.time() - t0
+    # Remove any file the tool dropped into the pristine input (only NEW names;
+    # originals in *before* are never touched).
+    for p in bids_dir.iterdir():
+        if p.name not in before and p.is_file():
+            p.unlink()
     tail = (proc.stderr or proc.stdout or "").strip().splitlines()
     return proc.returncode, dt, "\n".join(tail[-3:])
 
@@ -96,23 +118,6 @@ def run_converter(module_or_cmd, bids_dir: Path, json_map: str, out_ttl: Path):
 # lexical form emitted by the two code paths).
 
 
-def _pred_local(p) -> str:
-    """Short predicate label: the part after the last '/' or '#'."""
-    s = str(p)
-    return s.rsplit("#", 1)[-1].rsplit("/", 1)[-1] or s
-
-
-# Predicates whose objects legitimately differ run-to-run.
-_VOLATILE = {
-    "http://www.w3.org/ns/prov#startedAtTime",
-    "http://www.w3.org/ns/prov#endedAtTime",
-    "https://schema.org/softwareVersion",
-    "https://schema.org/runtimePlatform",
-}
-_NFO_FILENAME = "http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#filename"
-_NIIRI = "http://iri.nidash.org/"
-
-
 def compare_legacy(new_ttl: Path, legacy_ttl: Path) -> bool:
     """True if *new_ttl* and *legacy_ttl* are structurally equivalent.
 
@@ -122,54 +127,17 @@ def compare_legacy(new_ttl: Path, legacy_ttl: Path) -> bool:
     instance nodes, so a set comparison shows a huge *false* divergence even when
     the two graphs are equivalent.
 
-    We therefore compare a **typed shape multiset**: every instance node (blank
-    node or ``niiri:`` URI) is collapsed to its sorted ``rdf:type`` set, so the
-    comparison reflects the graph's structure + literal values, not the random
-    per-run instance identities.  Volatile objects (timestamps, tool version)
-    and the ``-o`` output filename (``CMU_a_legacy.ttl`` vs ``nidm.ttl``) are
-    normalized; numeric literals are folded (``0.03`` == ``3e-02``); explicit
-    ``xsd:string`` is treated as plain (RDF 1.1).
+    The typed-shape multiset comparator lives in
+    :mod:`scripts.parity_compare`; here we just print the ABIDE-style A/B report
+    around it.  Every instance node (blank node or ``niiri:`` URI) is collapsed
+    to its sorted ``rdf:type`` set, so the comparison reflects the graph's
+    structure + literal values, not the random per-run instance identities.
+    Volatile objects (timestamps, tool version) and the ``-o`` output filename
+    (``CMU_a_legacy.ttl`` vs ``nidm.ttl``) are normalized; numeric literals are
+    folded (``0.03`` == ``3e-02``); explicit ``xsd:string`` is treated as plain
+    (RDF 1.1).
     """
-    from collections import Counter
-    from rdflib import BNode, Graph, Literal, URIRef
-    from rdflib.namespace import RDF, XSD
-
-    numeric = {XSD.double, XSD.float, XSD.decimal}
-
-    def is_inst(t):
-        return isinstance(t, BNode) or (
-            isinstance(t, URIRef) and str(t).startswith(_NIIRI)
-        )
-
-    def typekey(g, n):
-        ts = sorted(str(t) for t in g.objects(n, RDF.type))
-        return "T[" + "|".join(ts) + "]" if ts else "T[]"
-
-    def object_key(g, p, o):
-        if is_inst(o):
-            return typekey(g, o)
-        if isinstance(o, Literal):
-            if str(p) in _VOLATILE:
-                return "<volatile>"
-            if str(p) == _NFO_FILENAME and not str(o).startswith("bids::"):
-                return "<output-file>"  # -o basename differs by design
-            if o.datatype in numeric:
-                try:
-                    return "num:" + repr(float(o))
-                except (ValueError, TypeError):
-                    return str(o)
-            return str(o)  # xsd:string == plain literal (RDF 1.1)
-        return str(o)
-
-    def shape(path):
-        g = Graph().parse(str(path), format="turtle")
-        c = Counter()
-        for s, p, o in g:
-            sk = typekey(g, s) if is_inst(s) else str(s)
-            c[(sk, str(p), object_key(g, p, o))] += 1
-        return c
-
-    cl, cn = shape(legacy_ttl), shape(new_ttl)
+    cl, cn = typed_shape(legacy_ttl), typed_shape(new_ttl)
     if cl == cn:
         print(
             f"      A/B STRUCTURALLY EQUIVALENT  "
@@ -186,6 +154,38 @@ def compare_legacy(new_ttl: Path, legacy_ttl: Path) -> bool:
         for (_sk, p, ok), n in c.most_common(12):
             print(f"        {label}: {_pred_local(p):22s} x{n}  " f"obj={ok[:46]}")
     return False
+
+
+def _collect_outputs(out: Path, per_subject: bool) -> dict:
+    """Map a stable relative key -> produced Turtle file for a converter run."""
+    if not per_subject:
+        return {"nidm.ttl": out}
+    return {str(p.relative_to(out)): p for p in sorted(out.glob("sub-*/nidm.ttl"))}
+
+
+def compare_outputs(new_out: Path, legacy_out: Path, per_subject: bool) -> bool:
+    """Compare a converter run legacy-vs-new; True if every file is equivalent.
+
+    Single-file mode compares the two ``nidm.ttl`` files; ``--per_subject`` mode
+    pairs ``sub-<id>/nidm.ttl`` files by relative path and compares each (and
+    flags a mismatched per-subject file *set* first).
+    """
+    new_files = _collect_outputs(new_out, per_subject)
+    legacy_files = _collect_outputs(legacy_out, per_subject)
+    if set(new_files) != set(legacy_files):
+        print(
+            "      A/B FILE-SET DIFF  "
+            f"legacy-only={sorted(set(legacy_files) - set(new_files))}  "
+            f"new-only={sorted(set(new_files) - set(legacy_files))}"
+        )
+        return False
+    all_ok = True
+    for rel in sorted(legacy_files):
+        if per_subject:
+            print(f"      [{rel}]")
+        if not compare_legacy(new_files[rel], legacy_files[rel]):
+            all_ok = False
+    return all_ok
 
 
 def main(argv=None):
@@ -212,6 +212,11 @@ def main(argv=None):
         "--compare-legacy", action="store_true", help="also run + diff the legacy tool"
     )
     ap.add_argument(
+        "--per-subject",
+        action="store_true",
+        help="run both tools in --per_subject mode and diff each sub-<id>/nidm.ttl",
+    )
+    ap.add_argument(
         "--keep-going", action="store_true", help="continue after a site fails"
     )
     args = ap.parse_args(argv)
@@ -234,27 +239,34 @@ def main(argv=None):
     )
     t0 = time.time()
 
+    ps = args.per_subject
     for site in sites:
-        out_ttl = out_root / site.name / "nidm.ttl"
-        rc, dt, tail = run_converter("bidsmri2nidm", site, args.json_map, out_ttl)
+        out = out_root / site.name if ps else out_root / site.name / "nidm.ttl"
+        rc, dt, tail = run_converter(
+            "bidsmri2nidm", site, args.json_map, out, per_subject=ps
+        )
         if rc != 0:
             n_fail += 1
             print(f"[FAIL] {site.name}  (rc={rc}, {dt:.0f}s)\n       {tail}")
             if not args.keep_going:
                 break
             continue
-        print(f"[ OK ] {site.name}  ({dt:.0f}s)  -> {out_ttl}")
+        print(f"[ OK ] {site.name}  ({dt:.0f}s)  -> {out}")
 
         if args.compare_legacy:
-            legacy_ttl = tmpdir / f"{site.name}_legacy.ttl"
+            legacy_out = (
+                tmpdir / f"{site.name}_legacy"
+                if ps
+                else tmpdir / f"{site.name}_legacy.ttl"
+            )
             lrc, ldt, ltail = run_converter(
-                LEGACY_MODULE, site, args.json_map, legacy_ttl
+                LEGACY_MODULE, site, args.json_map, legacy_out, per_subject=ps
             )
             if lrc != 0:
                 print(
                     f"      legacy run FAILED (rc={lrc}); skipping A/B\n       {ltail}"
                 )
-            elif not compare_legacy(out_ttl, legacy_ttl):
+            elif not compare_outputs(out, legacy_out, ps):
                 n_diverge += 1
         n_ok += 1
 
