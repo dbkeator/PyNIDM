@@ -122,3 +122,46 @@ def format_diff(a_only: Counter, b_only: Counter, limit: int = 12) -> str:
         for (_sk, p, ok), n in c.most_common(limit):
             lines.append(f"  {label}: {_pred_local(p):22s} x{n}  obj={ok[:46]}")
     return "\n".join(lines)
+
+
+def _main(argv=None):
+    """CLI: compare two NIDM turtle files by typed-shape multiset.
+
+    Usage: python parity_compare.py <legacy.ttl> <linkml.ttl> [--limit N]
+    Exit code 0 == identical typed shape (parity), 1 == divergence.
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Compare two NIDM files by typed-shape multiset "
+        "(a==legacy, b==linkml); volatile predicates are normalized."
+    )
+    ap.add_argument("legacy", help="path to the 'a' NIDM turtle (e.g. legacy)")
+    ap.add_argument("linkml", help="path to the 'b' NIDM turtle (e.g. linkml)")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=40,
+        help="max divergent typed shapes to print per side (default 40)",
+    )
+    args = ap.parse_args(argv)
+
+    a_shape = typed_shape(args.legacy)
+    equal, a_only, b_only = compare(args.legacy, args.linkml)
+    total = sum(a_shape.values())
+    if equal:
+        print(f"PARITY OK: identical typed-shape multiset ({total} typed instances)")
+        return 0
+    print(
+        f"DIVERGENCE: {sum(a_only.values())} a-only (legacy) / "
+        f"{sum(b_only.values())} b-only (linkml) typed shapes "
+        f"[a total={total}]"
+    )
+    print(format_diff(a_only, b_only, limit=args.limit))
+    return 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_main())
