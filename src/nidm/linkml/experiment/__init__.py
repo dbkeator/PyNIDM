@@ -36,6 +36,7 @@ from .session import Session
 from .software_agent import SoftwareAgent
 
 __all__ = [
+    "add_segmentation_derivative",
     "Acquisition",
     "AcquisitionObject",
     "AssessmentAcquisition",
@@ -60,3 +61,16 @@ __all__ = [
     "Session",
     "SoftwareAgent",
 ]
+
+
+def __getattr__(name):  # noqa: D401 -- PEP 562 lazy attribute
+    """Lazily expose ``add_segmentation_derivative`` without importing the
+    derivatives module (and its ``pandas`` / tools dependencies) at package
+    import time.  Keeps ``import nidm.linkml.experiment`` lightweight while
+    still allowing ``from nidm.linkml.experiment import
+    add_segmentation_derivative``."""
+    if name == "add_segmentation_derivative":
+        from .derivatives import add_segmentation_derivative
+
+        return add_segmentation_derivative
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

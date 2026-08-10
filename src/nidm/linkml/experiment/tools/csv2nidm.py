@@ -644,6 +644,15 @@ def _create_software_agent_for_derivative(
         (agent, DCT.hasVersion, Literal(_software_scalar(software_metadata, "version")))
     )
     g.add((agent, SIO.URL, Literal(_software_scalar(software_metadata, "url"))))
+    # nidm:NIDM_0000164 <tool> -- the "neuroimaging analysis software" tool
+    # binding that GetBrainVolumes (pynidm query -bv) matches on to identify the
+    # producing tool: prov:qualifiedAssociation [prov:agent [nidm:NIDM_0000164 ?tool]].
+    # Without this triple on the SoftwareAgent the derivative is invisible to -bv
+    # (ds002411 carries `nidm:NIDM_0000164 fs:`). The value is the tool URI so it
+    # is a stable identifier across separately-produced graphs.
+    tool_uri = _software_scalar(software_metadata, "url")
+    if tool_uri:
+        g.add((agent, _C.NIDM_NEUROIMAGING_ANALYSIS_SOFTWARE, URIRef(tool_uri)))
     return agent
 
 
