@@ -154,6 +154,156 @@ def _build_abide_padding_fixture(root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Richer fixtures -- exercise the ses-*, run-*, dwi (bval/bvec), events.tsv and
+# JSON-sidecar code paths in bidsmri2project / addimagingsessions.  Every
+# .nii/.nii.gz/.bval/.bvec carries NON-EMPTY deterministic bytes so the SHA-512
+# triples both tools emit are byte-identical (an empty placeholder could hash
+# differently depending on how each tool treats a zero-length file, which would
+# be a *spurious* divergence -- we want to surface REAL ones only).
+# ---------------------------------------------------------------------------
+
+
+def _write_session_scan(bids_root: Path, relpath: str, content: bytes) -> Path:
+    """Write NON-EMPTY deterministic *content* to ``bids_root/relpath``,
+    creating parent directories.  The relative path must already be a
+    BIDS-correct name (the caller owns the entity ordering)."""
+    target = bids_root / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return target
+
+
+def _build_multisession_fixture(root: Path) -> None:
+    """Two imaging sessions for sub-01 (``ses-1``/``ses-2``), each with a T1w,
+    plus a func bold in ``ses-1`` only.  Exercises ``get_sessions`` /
+    ``session=`` scan discovery and the ``bids:session_number`` Session path.
+
+    pybids requires the ``ses-<label>`` key in BOTH the directory AND the
+    filename, so files are named ``sub-01_ses-1_T1w.nii.gz`` etc.
+    """
+    _write_dataset_description(root)
+    _write_session_scan(
+        root,
+        "sub-01/ses-1/anat/sub-01_ses-1_T1w.nii.gz",
+        b"T1w ses-1 parity fixture content\n",
+    )
+    _write_session_scan(
+        root,
+        "sub-01/ses-2/anat/sub-01_ses-2_T1w.nii.gz",
+        b"T1w ses-2 parity fixture content\n",
+    )
+    _write_session_scan(
+        root,
+        "sub-01/ses-1/func/sub-01_ses-1_task-rest_bold.nii.gz",
+        b"bold ses-1 parity fixture content\n",
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
+def _build_runs_fixture(root: Path) -> None:
+    """Two runs of the same task for sub-01 (``run-1``/``run-2``).  Exercises
+    the ``run`` entity (``bids:acquisition`` / ``json_keys['run']`` triple via
+    ``_emit_run_entity``) and the per-run events discovery in
+    ``_find_events_file`` (which keys on the ``run`` entity)."""
+    _write_dataset_description(root)
+    _write_session_scan(
+        root,
+        "sub-01/func/sub-01_task-rest_run-1_bold.nii.gz",
+        b"bold run-1 parity fixture content\n",
+    )
+    _write_session_scan(
+        root,
+        "sub-01/func/sub-01_task-rest_run-2_bold.nii.gz",
+        b"bold run-2 parity fixture content\n",
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
+def _build_dwi_fixture(root: Path) -> None:
+    """A DWI scan for sub-01 with paired ``.bval`` + ``.bvec``.  Exercises
+    ``_attach_bval_file`` (pybids ``get_bval``) and ``_attach_bvec_files``
+    (the deliberate filesystem walk), including their SHA-512 triples.
+
+    Minimal-but-valid gradient content: three volumes, one b0 + two shells.
+    """
+    _write_dataset_description(root)
+    _write_session_scan(
+        root, "sub-01/dwi/sub-01_dwi.nii.gz", b"dwi parity fixture content\n"
+    )
+    # bval: one row of b-values (b0 + two b=1000 volumes).
+    (root / "sub-01" / "dwi" / "sub-01_dwi.bval").write_text("0 1000 1000\n")
+    # bvec: three rows (x/y/z) of unit-ish gradient directions.
+    (root / "sub-01" / "dwi" / "sub-01_dwi.bvec").write_text(
+        "0 0.707 -0.707\n0 0.707 0.707\n0 0.0 0.0\n"
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
+def _build_events_fixture(root: Path) -> None:
+    """A func bold scan for sub-01 with a sibling ``*_events.tsv``.  Exercises
+    ``_attach_events_file`` -> ``nidm:StimulusResponseFile`` AcquisitionObject,
+    its ``TaskName`` triple, and the ``prov:Location`` fallback (emitted when
+    there are no git-annex sources -- these tmp fixtures have none, so both
+    tools take that branch and the folded ``file:`` basenames must match)."""
+    _write_dataset_description(root)
+    _write_session_scan(
+        root,
+        "sub-01/func/sub-01_task-rest_bold.nii.gz",
+        b"bold events parity fixture content\n",
+    )
+    (root / "sub-01" / "func" / "sub-01_task-rest_events.tsv").write_text(
+        "onset\tduration\ttrial_type\n0.0\t1.0\tgo\n2.0\t1.5\tstop\n"
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
+def _build_json_sidecars_fixture(root: Path) -> None:
+    """JSON sidecars next to the scans: an anat sidecar carrying a few BIDS
+    metadata keys (``RepetitionTime``/``EchoTime``/``MagneticFieldStrength``)
+    and a func sidecar carrying ``TaskName``.  Exercises ``_load_sidecar_metadata``
+    -> ``_apply_json_keys`` (the ``BIDS_Constants.json_keys`` predicate mapping)
+    on both anat and func objects."""
+    _write_dataset_description(root)
+    _write_session_scan(
+        root, "sub-01/anat/sub-01_T1w.nii.gz", b"T1w sidecar parity fixture content\n"
+    )
+    (root / "sub-01" / "anat" / "sub-01_T1w.json").write_text(
+        json.dumps(
+            {
+                "RepetitionTime": 2.3,
+                "EchoTime": 0.003,
+                "MagneticFieldStrength": 3,
+            }
+        )
+    )
+    _write_session_scan(
+        root,
+        "sub-01/func/sub-01_task-rest_bold.nii.gz",
+        b"bold sidecar parity fixture content\n",
+    )
+    (root / "sub-01" / "func" / "sub-01_task-rest_bold.json").write_text(
+        json.dumps({"TaskName": "rest", "RepetitionTime": 2.0, "EchoTime": 0.03})
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
+#: case name -> (fixture builder, per_subject flag).  The first three entries
+#: are the original gate (kept intact); the rest are the richer fixtures.
+_PARITY_CASES = {
+    "single": (_build_basic_fixture, False),
+    "per_subject": (_build_basic_fixture, True),
+    "abide_padding": (_build_abide_padding_fixture, True),
+    "multisession": (_build_multisession_fixture, False),
+    "runs": (_build_runs_fixture, False),
+    "dwi_bvalbvec": (_build_dwi_fixture, False),
+    "events": (_build_events_fixture, False),
+    "json_sidecars": (_build_json_sidecars_fixture, False),
+    "multisession_per_subject": (_build_multisession_fixture, True),
+    "runs_per_subject": (_build_runs_fixture, True),
+}
+
+
+# ---------------------------------------------------------------------------
 # Runner + parity assertion
 # ---------------------------------------------------------------------------
 
@@ -236,19 +386,26 @@ def _run_both_and_assert(src: Path, json_map: Path, tmp_path: Path, per_subject:
 @pytest.mark.parametrize(
     "case",
     [
+        # --- original gate (kept intact) ---
         "single",  # 1. single-file mode, T1w + bold + covered participants var
         "per_subject",  # 2. same fixture in --per_subject mode (the regressed case)
         "abide_padding",  # 3. --per_subject, padded dir vs un-padded participant_id
+        # --- richer fixtures (single-file mode) ---
+        "multisession",  # 4. ses-1/ses-2 anat + a ses-1 func bold
+        "runs",  # 5. run-1/run-2 of the same func task
+        "dwi_bvalbvec",  # 6. dwi scan + paired .bval/.bvec
+        "events",  # 7. func bold + sibling *_events.tsv
+        "json_sidecars",  # 8. anat/func JSON sidecars (RepetitionTime, TaskName, ...)
+        # --- richer fixtures re-run in --per_subject mode ---
+        "multisession_per_subject",  # 9. #4 in --per_subject mode
+        "runs_per_subject",  # 10. #5 in --per_subject mode
     ],
 )
 def test_bidsmri2nidm_legacy_vs_linkml_parity(tmp_path: Path, case: str):
     src = tmp_path / "bids"
     src.mkdir()
-    if case == "abide_padding":
-        _build_abide_padding_fixture(src)
-    else:
-        _build_basic_fixture(src)
+    builder, per_subject = _PARITY_CASES[case]
+    builder(src)
 
     json_map = _write_covering_map(tmp_path / "map.json", ["participant_id", "sex"])
-    per_subject = case in ("per_subject", "abide_padding")
     _run_both_and_assert(src, json_map, tmp_path, per_subject)

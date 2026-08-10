@@ -1023,3 +1023,230 @@ def test_dwi_bval_bvec_are_collection_members(tmp_path: Path):
     bvec = list(g.subjects(RDF.type, BIDS_Constants.scans["bvec"]))[0]
     assert bval in members
     assert bvec in members
+
+
+# ---------------------------------------------------------------------------
+# POSITIVE correctness tests for the richer linkml features
+# ---------------------------------------------------------------------------
+#
+# The tests below assert the CORRECT linkml `bidsmri2nidm` output directly,
+# INDEPENDENT of the legacy tool / parity gate.  A parity gate previously
+# proved linkml is correct on multi-session, DWI, events, and JSON sidecars
+# (legacy had bugs that are now fixed); these lock in linkml's correctness so
+# the behavior stays validated even if the legacy tool / parity gate is later
+# removed.  They run in a plain linkml env (in-process, no legacy extra).
+# ---------------------------------------------------------------------------
+
+
+def _write_session_t1w(
+    bids_root: Path, subject: str = "sub-01", session: str = "1"
+) -> Path:
+    """Write a sub-XX/ses-Y/anat/sub-XX_ses-Y_T1w.nii.gz scan (non-empty)."""
+    anat = bids_root / subject / f"ses-{session}" / "anat"
+    anat.mkdir(parents=True, exist_ok=True)
+    scan = anat / f"{subject}_ses-{session}_T1w.nii.gz"
+    scan.write_bytes(b"fake nifti content for hashing")
+    return scan
+
+
+def _write_session_bold(
+    bids_root: Path,
+    subject: str = "sub-01",
+    session: str = "1",
+    task: str = "rest",
+) -> Path:
+    """Write a sub-XX/ses-Y/func/sub-XX_ses-Y_task-Z_bold.nii.gz scan."""
+    func = bids_root / subject / f"ses-{session}" / "func"
+    func.mkdir(parents=True, exist_ok=True)
+    scan = func / f"{subject}_ses-{session}_task-{task}_bold.nii.gz"
+    scan.write_bytes(b"fake bold content for hashing")
+    return scan
+
+
+def _write_bold_with_sidecar(
+    bids_root: Path,
+    subject: str = "sub-01",
+    task: str = "rest",
+    sidecar: dict = None,
+) -> Path:
+    """Write a func bold scan + its JSON sidecar (no paired events.tsv)."""
+    func = bids_root / subject / "func"
+    func.mkdir(parents=True, exist_ok=True)
+    bold = func / f"{subject}_task-{task}_bold.nii.gz"
+    bold.write_bytes(b"fake bold content for hashing")
+    (func / f"{subject}_task-{task}_bold.json").write_text(
+        json.dumps(sidecar if sidecar is not None else {"TaskName": task})
+    )
+    return bold
+
+
+def test_multisession_emits_one_session_per_ses(tmp_path: Path):
+    """Each ses-* directory becomes its own nidm:Session carrying
+    bids:session_number, with NO phantom empty imaging Session.
+
+    linkml (bidsmri2project) creates one Session per pybids-discovered
+    imaging session (with ``BIDS["session_number"]`` = the session label),
+    PLUS one assessment Session from participants.tsv.  So sub-01 with two
+    imaging sessions produces exactly THREE nidm:Session: two imaging (each
+    carrying session_number) and one assessment (no session_number).  A
+    phantom empty imaging session would push the total to four.
+    """
+    _write_dataset_description(tmp_path)
+    _write_session_t1w(tmp_path, subject="sub-01", session="1")
+    _write_session_t1w(tmp_path, subject="sub-01", session="2")
+    _write_session_bold(tmp_path, subject="sub-01", session="1")
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    sessions = list(g.subjects(RDF.type, NIDM.Session))
+    # imaging sessions (2) + participants.tsv assessment session (1) = 3
+    assert len(sessions) == 3
+
+    with_number = [s for s in sessions if list(g.objects(s, BIDS["session_number"]))]
+    # Exactly TWO Sessions carry a session_number (the two imaging sessions).
+    assert len(with_number) == 2
+    values = {str(v) for s in with_number for v in g.objects(s, BIDS["session_number"])}
+    # pybids reports session labels without the "ses-" prefix; tolerate both
+    # forms since we cannot run pybids here to confirm the exact stored form.
+    assert values in ({"1", "2"}, {"ses-1", "ses-2"})
+
+    # No extra empty imaging Session: the only Session lacking a session_number
+    # is the single participants.tsv assessment Session.
+    without_number = [
+        s for s in sessions if not list(g.objects(s, BIDS["session_number"]))
+    ]
+    assert len(without_number) == 1
+
+
+def test_dwi_usage_and_bvalbvec_types(tmp_path: Path):
+    """A DWI scan emits an AcquisitionObject with
+    hadImageUsageType = DiffusionWeighted, plus one nidm:b-value and one
+    nidm:b-vector object -- each ALSO typed nidm:AcquisitionObject and each
+    carrying a sha512 hash.
+
+    Predicates/types quoted from bidsmri2nidm.py:
+      * usage: ``_DIRECTORY_TO_USAGE["dwi"] ->
+        ImageUsageTypeEnum.DiffusionWeighted`` on the MRObject, emitted as
+        ``nidm:hadImageUsageType nidm:DiffusionWeighted``.
+      * bval: ``bval_obj.graph.add((.., RDF.type,
+        BIDS_Constants.scans["bval"]))`` == ``nidm:b-value``
+        (constants.NIDM_MRI_DWI_BVAL).
+      * bvec: ``BIDS_Constants.scans["bvec"]`` == ``nidm:b-vector``
+        (constants.NIDM_MRI_DWI_BVEC).
+      * sha512 via ``_emit_sha512_triple`` -> ``crypto:sha512``
+        (constants.CRYPTO_SHA512).
+    """
+    _write_dataset_description(tmp_path)
+    _write_dwi_with_bval_bvec(tmp_path, subject="sub-01")
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    # The dwi scan object: identified by its DiffusionWeighted usage type.
+    dwi_objs = list(g.subjects(NIDM.hadImageUsageType, NIDM.DiffusionWeighted))
+    assert len(dwi_objs) == 1
+    assert (dwi_objs[0], RDF.type, NIDM.AcquisitionObject) in g
+
+    bvals = list(g.subjects(RDF.type, _C.NIDM_MRI_DWI_BVAL))
+    bvecs = list(g.subjects(RDF.type, _C.NIDM_MRI_DWI_BVEC))
+    assert len(bvals) == 1
+    assert len(bvecs) == 1
+
+    # bval/bvec objects are AcquisitionObjects too.
+    assert (bvals[0], RDF.type, NIDM.AcquisitionObject) in g
+    assert (bvecs[0], RDF.type, NIDM.AcquisitionObject) in g
+
+    # Each carries a sha512 digest (128-char hex).
+    bval_hashes = list(g.objects(bvals[0], _C.CRYPTO_SHA512))
+    bvec_hashes = list(g.objects(bvecs[0], _C.CRYPTO_SHA512))
+    assert len(bval_hashes) == 1 and len(str(bval_hashes[0])) == 128
+    assert len(bvec_hashes) == 1 and len(str(bvec_hashes[0])) == 128
+
+
+def test_events_emits_stimulus_response_file(tmp_path: Path):
+    """A func bold scan with a sibling events.tsv emits a
+    nidm:StimulusResponseFile object with:
+      * nfo:filename ending in ``events.tsv``,
+      * TaskName == "rest" (via BIDS_Constants.json_keys["TaskName"] ==
+        nidm:Task),
+      * prov:wasAttributedTo pointing at the bold AcquisitionObject.
+
+    Quoted from ``_attach_events_file``:
+      ``events_obj.graph.add((.., RDF.type, _C.NIDM_MRI_BOLD_EVENTS))`` and
+      ``events_obj.graph.add((.., PROV.wasAttributedTo, bold_obj.identifier))``.
+    """
+    _write_dataset_description(tmp_path)
+    _write_bold_with_events(tmp_path, subject="sub-01", task="rest")
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    events = list(g.subjects(RDF.type, _C.NIDM_MRI_BOLD_EVENTS))
+    assert len(events) == 1
+    evt = events[0]
+
+    filenames = [str(f) for f in g.objects(evt, NFO.filename)]
+    assert filenames and any(f.endswith("events.tsv") for f in filenames)
+
+    tasknames = list(g.objects(evt, BIDS_Constants.json_keys["TaskName"]))
+    assert [str(t) for t in tasknames] == ["rest"]
+
+    attributed = list(g.objects(evt, PROV.wasAttributedTo))
+    assert len(attributed) == 1
+    # The attribution target is the functional bold AcquisitionObject.
+    assert (attributed[0], RDF.type, NIDM.AcquisitionObject) in g
+    assert (attributed[0], NIDM.hadImageUsageType, NIDM.Functional) in g
+
+
+def test_json_sidecar_metadata_emitted(tmp_path: Path):
+    """JSON sidecar keys land on the scan AcquisitionObjects via
+    ``_apply_json_keys`` + BIDS_Constants.json_keys.
+
+    Predicates quoted from bids_constants.json_keys:
+      * RepetitionTime -> DICOM["RepetitionTime"]
+      * EchoTime       -> BIDS["EchoTime"]
+      * MagneticFieldStrength -> DICOM["MagneticFieldStrength"]
+      * TaskName       -> Constants.NIDM_MRI_FUNCTION_TASK (nidm:Task)
+    """
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path, subject="sub-01")
+    _write_t1w_sidecar(
+        tmp_path,
+        subject="sub-01",
+        payload={
+            "RepetitionTime": 2.0,
+            "EchoTime": 0.03,
+            "MagneticFieldStrength": 3.0,
+        },
+    )
+    _write_bold_with_sidecar(
+        tmp_path, subject="sub-01", task="rest", sidecar={"TaskName": "rest"}
+    )
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
+
+    project = _build_project(tmp_path)
+    g = project.graph
+
+    # The anat scan carries RepetitionTime / EchoTime / MagneticFieldStrength.
+    anat_objs = list(g.subjects(NIDM.hadImageUsageType, NIDM.Anatomical))
+    assert len(anat_objs) == 1
+    anat = anat_objs[0]
+
+    rts = list(g.objects(anat, BIDS_Constants.json_keys["RepetitionTime"]))
+    assert rts and abs(float(rts[0]) - 2.0) < 1e-6
+
+    ets = list(g.objects(anat, BIDS_Constants.json_keys["EchoTime"]))
+    assert ets and abs(float(ets[0]) - 0.03) < 1e-6
+
+    mfs = list(g.objects(anat, BIDS_Constants.json_keys["MagneticFieldStrength"]))
+    assert mfs and abs(float(mfs[0]) - 3.0) < 1e-6
+
+    # The func bold scan carries TaskName == "rest".
+    bold_objs = list(g.subjects(NIDM.hadImageUsageType, NIDM.Functional))
+    assert len(bold_objs) == 1
+    tasknames = list(g.objects(bold_objs[0], BIDS_Constants.json_keys["TaskName"]))
+    assert [str(t) for t in tasknames] == ["rest"]
