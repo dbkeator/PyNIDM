@@ -287,6 +287,31 @@ def _build_json_sidecars_fixture(root: Path) -> None:
     _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
 
 
+def _build_fieldmap_fixture(root: Path) -> None:
+    """Field-map scans in BOTH a proper ``fmap/`` directory AND misplaced
+    inside ``dwi/`` (as ABIDE II does).  Exercises the ``FieldMap`` image-usage
+    type and the ``validate=False`` capture path in both tools: neither scan
+    may be labeled ``DiffusionWeighted``, and the dwi/-dir fieldmap must NOT be
+    dropped.  A real dwi scan is included alongside so the dwi vs fieldmap
+    distinction is actually tested."""
+    _write_dataset_description(root)
+    # proper fmap/ location
+    _write_session_scan(
+        root, "sub-01/fmap/sub-01_fieldmap.nii.gz", b"fmap-dir fieldmap fixture\n"
+    )
+    # misplaced fieldmap inside dwi/ (ABIDE II style)
+    _write_session_scan(
+        root, "sub-01/dwi/sub-01_fieldmap.nii.gz", b"dwi-dir fieldmap fixture\n"
+    )
+    # a genuine dwi scan so DiffusionWeighted vs FieldMap is distinguished
+    _write_session_scan(root, "sub-01/dwi/sub-01_dwi.nii.gz", b"dwi scan fixture\n")
+    (root / "sub-01" / "dwi" / "sub-01_dwi.bval").write_text("0 1000 1000\n")
+    (root / "sub-01" / "dwi" / "sub-01_dwi.bvec").write_text(
+        "0 0.707 -0.707\n0 0.707 0.707\n0 0.0 0.0\n"
+    )
+    _write_participants_tsv(root, "participant_id\tsex\nsub-01\tM\n")
+
+
 #: case name -> (fixture builder, per_subject flag).  The first three entries
 #: are the original gate (kept intact); the rest are the richer fixtures.
 _PARITY_CASES = {
@@ -296,6 +321,7 @@ _PARITY_CASES = {
     "multisession": (_build_multisession_fixture, False),
     "runs": (_build_runs_fixture, False),
     "dwi_bvalbvec": (_build_dwi_fixture, False),
+    "fieldmap": (_build_fieldmap_fixture, False),
     "events": (_build_events_fixture, False),
     "json_sidecars": (_build_json_sidecars_fixture, False),
     "multisession_per_subject": (_build_multisession_fixture, True),
@@ -394,6 +420,7 @@ def _run_both_and_assert(src: Path, json_map: Path, tmp_path: Path, per_subject:
         "multisession",  # 4. ses-1/ses-2 anat + a ses-1 func bold
         "runs",  # 5. run-1/run-2 of the same func task
         "dwi_bvalbvec",  # 6. dwi scan + paired .bval/.bvec
+        "fieldmap",  # 6b. fieldmap in fmap/ AND misplaced in dwi/ (FieldMap usage)
         "events",  # 7. func bold + sibling *_events.tsv
         "json_sidecars",  # 8. anat/func JSON sidecars (RepetitionTime, TaskName, ...)
         # --- richer fixtures re-run in --per_subject mode ---

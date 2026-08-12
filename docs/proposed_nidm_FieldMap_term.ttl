@@ -1,0 +1,32 @@
+# Proposed NIDM vocabulary entry for the new image-usage type `nidm:FieldMap`.
+#
+# WHERE THIS GOES: the NIDM-Experiment / NIDM-Terms vocabulary (the external
+# repo that formally defines the other image-usage types nidm:Anatomical,
+# nidm:Functional, nidm:DiffusionWeighted). It is NOT defined inside PyNIDM --
+# PyNIDM only emits the URI. This file is a hand-off artifact so the term can
+# be added to the vocabulary and documented rather than being an undefined URI.
+#
+# ACTION: copy the existing `nidm:DiffusionWeighted` definition from the
+# vocabulary source and mirror it for `nidm:FieldMap`, adjusting label/comment.
+# The block below is a reasonable proposal; align its rdf:type / parent
+# (owl:Class vs owl:NamedIndividual, rdfs:subClassOf ...) with however the
+# sibling usage types are actually modeled in the source vocabulary.
+
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+nidm:FieldMap
+    a owl:Class ;
+    rdfs:label "Field Map"@en ;
+    rdfs:comment
+        "An MRI acquisition intended to map B0 magnetic-field inhomogeneity (a field map), used for susceptibility-distortion correction of EPI-based scans. Corresponds to the BIDS field-map suffixes: fieldmap, magnitude, magnitude1, magnitude2, phasediff, phase1, phase2, and epi. Used as an nidm:hadImageUsageType value alongside nidm:Anatomical, nidm:Functional, and nidm:DiffusionWeighted."@en ;
+    rdfs:isDefinedBy nidm: .
+
+# If the sibling usage types are modeled as instances of a shared class
+# (e.g. nidm:ImageUsageType) rather than owl:Class, use instead:
+#
+# nidm:FieldMap
+#     a nidm:ImageUsageType ;
+#     rdfs:label "Field Map"@en ;
+#     rdfs:comment "..."@en .
