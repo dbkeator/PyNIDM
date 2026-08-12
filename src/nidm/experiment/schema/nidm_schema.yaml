@@ -80,6 +80,8 @@ enums:
         meaning: nidm:Functional
       DiffusionWeighted:
         meaning: nidm:DiffusionWeighted
+      FieldMap:
+        meaning: nidm:FieldMap
 
 # ---------------------------------------------------------------------------
 # Classes

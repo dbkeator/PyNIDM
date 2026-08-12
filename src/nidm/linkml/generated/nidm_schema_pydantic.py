@@ -366,6 +366,7 @@ class ImageUsageTypeEnum(str, Enum):
     Anatomical = "Anatomical"
     Functional = "Functional"
     DiffusionWeighted = "DiffusionWeighted"
+    FieldMap = "FieldMap"
 
 
 

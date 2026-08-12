@@ -28,6 +28,7 @@ ENUM_MEANINGS = {
     ('ImageContrastTypeEnum', 'T2Weighted'): 'nidm:T2Weighted',
     ('ImageUsageTypeEnum', 'Anatomical'): 'nidm:Anatomical',
     ('ImageUsageTypeEnum', 'DiffusionWeighted'): 'nidm:DiffusionWeighted',
+    ('ImageUsageTypeEnum', 'FieldMap'): 'nidm:FieldMap',
     ('ImageUsageTypeEnum', 'Functional'): 'nidm:Functional',
 }
 

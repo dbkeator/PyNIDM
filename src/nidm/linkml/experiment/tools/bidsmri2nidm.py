@@ -99,6 +99,37 @@ _DIRECTORY_TO_USAGE = {
     "dwi": ImageUsageTypeEnum.DiffusionWeighted,
 }
 
+#: BIDS fieldmap suffixes.  These carry FieldMap usage regardless of the
+#: directory they live in -- some datasets (e.g. ABIDE II) place _fieldmap
+#: scans inside dwi/ rather than fmap/, and they must NOT be labeled
+#: DiffusionWeighted.
+_FIELDMAP_SUFFIXES = frozenset(
+    {
+        "fieldmap",
+        "epi",
+        "phasediff",
+        "phase1",
+        "phase2",
+        "magnitude",
+        "magnitude1",
+        "magnitude2",
+    }
+)
+
+
+def _resolve_image_usage(datatype, suffix):
+    """Return the ``ImageUsageTypeEnum`` for a scan.
+
+    Decided by the BIDS *suffix* first so a fieldmap scan is labeled
+    ``FieldMap`` even when it lives in a ``dwi/`` directory; otherwise it
+    falls back to the modality directory (anat/func/dwi).  Files in an
+    explicit ``fmap/`` directory are also ``FieldMap``.
+    """
+    if suffix in _FIELDMAP_SUFFIXES or datatype == "fmap":
+        return ImageUsageTypeEnum.FieldMap
+    return _DIRECTORY_TO_USAGE.get(datatype)
+
+
 #: BIDS filename suffix (between last `_` and `.`) -> image contrast.
 _SUFFIX_TO_CONTRAST = {
     "T1w": ImageContrastTypeEnum.T1Weighted,
@@ -634,7 +665,15 @@ def _apply_scan_contrast_and_usage(obj, suffix: str, datatype: str) -> None:
             "WARNING: No matching image contrast type found in BIDS_Constants.py for %s",
             suffix,
         )
-    if datatype in BIDS_Constants.scans:
+    # Usage: fieldmap scans (by suffix, or an explicit fmap/ directory)
+    # already have their FieldMap usage set on the MRObject constructor via
+    # _resolve_image_usage.  Do NOT also stamp the directory-based usage here,
+    # or a _fieldmap scan living in dwi/ ends up with BOTH FieldMap and
+    # DiffusionWeighted.  Non-fieldmap scans still get the datatype-based usage
+    # (this is the only path that emits usage for e.g. asl).
+    if suffix in _FIELDMAP_SUFFIXES or datatype == "fmap":
+        pass
+    elif datatype in BIDS_Constants.scans:
         obj.graph.add(
             (obj.identifier, _C.NIDM_IMAGE_USAGE_TYPE, BIDS_Constants.scans[datatype])
         )
@@ -932,7 +971,7 @@ def addimagingsessions(
                 acq,
                 filename=filename,
                 image_contrast_type=_SUFFIX_TO_CONTRAST.get(suffix),
-                image_usage_type=_DIRECTORY_TO_USAGE.get(datatype),
+                image_usage_type=_resolve_image_usage(datatype, suffix),
             )
         acq.add_qualified_association(person, role=SIO.Subject)
         _add_collection_member(collection, obj)
