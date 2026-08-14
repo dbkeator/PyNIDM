@@ -1,16 +1,26 @@
-# Proposed NIDM vocabulary entry for the new image-usage type `nidm:FieldMap`.
+# Proposed NIDM-Experiment vocabulary entry for a field-map image-usage type.
 #
-# WHERE THIS GOES: the NIDM-Experiment / NIDM-Terms vocabulary (the external
-# repo that formally defines the other image-usage types nidm:Anatomical,
-# nidm:Functional, nidm:DiffusionWeighted). It is NOT defined inside PyNIDM --
-# PyNIDM only emits the URI. This file is a hand-off artifact so the term can
-# be added to the vocabulary and documented rather than being an undefined URI.
+# WHERE THIS GOES: the NIDM-Experiment vocabulary rendered at
+#   https://incf-nidash.github.io/nidm-experiment/index.html
+# (maintained externally). PyNIDM only EMITS the URI nidm:FieldMap as an
+# nidm:hadImageUsageType value; the term itself must be defined in the
+# vocabulary source so it is documented and dereferenceable.
 #
-# ACTION: copy the existing `nidm:DiffusionWeighted` definition from the
-# vocabulary source and mirror it for `nidm:FieldMap`, adjusting label/comment.
-# The block below is a reasonable proposal; align its rdf:type / parent
-# (owl:Class vs owl:NamedIndividual, rdfs:subClassOf ...) with however the
-# sibling usage types are actually modeled in the source vocabulary.
+# CONTEXT FROM THE CURRENT VOCABULARY:
+#   * There is a parent class  nidm:'Image Usage Type'  (local name
+#     ImageUsageType) whose existing children include: Anatomical, Functional
+#     (-> Resting State, Task Based), Diffusion Tensor, Localization, and
+#     DistortionCorrection.
+#   * There is NO field-map usage type yet.
+#   * NOTE the existing sibling  nidm:DistortionCorrection : a field map is
+#     often acquired *for* distortion correction, so the maintainer may prefer
+#     to (a) add nidm:FieldMap as below, (b) reuse nidm:DistortionCorrection,
+#     or (c) make FieldMap a child of DistortionCorrection.  Whichever URI the
+#     vocabulary settles on, the bidsmri2nidm tools will emit that exact URI
+#     (they currently emit nidm:FieldMap).
+#
+# The block below mirrors how the sibling usage types (Anatomical, Functional)
+# are modeled: an owl:Class that is rdfs:subClassOf nidm:'Image Usage Type'.
 
 @prefix nidm: <http://purl.org/nidash/nidm#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
@@ -18,15 +28,8 @@
 
 nidm:FieldMap
     a owl:Class ;
-    rdfs:label "Field Map"@en ;
+    rdfs:label "Field Map" ;
+    rdfs:subClassOf nidm:ImageUsageType ;
     rdfs:comment
-        "An MRI acquisition intended to map B0 magnetic-field inhomogeneity (a field map), used for susceptibility-distortion correction of EPI-based scans. Corresponds to the BIDS field-map suffixes: fieldmap, magnitude, magnitude1, magnitude2, phasediff, phase1, phase2, and epi. Used as an nidm:hadImageUsageType value alongside nidm:Anatomical, nidm:Functional, and nidm:DiffusionWeighted."@en ;
+        "Field Map is a description of the usage of a given acquisition object, indicating that the object is a magnetic-field (B0) map used to characterize and correct susceptibility-induced geometric distortion in MRI (typically of EPI-based functional or diffusion scans). Corresponds to the BIDS field-map data type (fmap/) and its suffixes: fieldmap, magnitude, magnitude1, magnitude2, phasediff, phase1, phase2, and epi." ;
     rdfs:isDefinedBy nidm: .
-
-# If the sibling usage types are modeled as instances of a shared class
-# (e.g. nidm:ImageUsageType) rather than owl:Class, use instead:
-#
-# nidm:FieldMap
-#     a nidm:ImageUsageType ;
-#     rdfs:label "Field Map"@en ;
-#     rdfs:comment "..."@en .
