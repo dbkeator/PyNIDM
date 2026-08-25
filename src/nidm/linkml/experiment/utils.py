@@ -338,15 +338,17 @@ def add_git_annex_sources(obj, bids_root, filepath: Optional[str] = None) -> int
         return 0
 
     try:
-        # Normalize the repo ROOT to its real path so AnnexRepo resolves a
-        # symlinked dataset root (e.g. an HPC automount like /orcd/...).  Do NOT
-        # realpath the individual file: git-annex tracks the working-tree
-        # symlink, and realpath would resolve it to the annex object
-        # (SHA256E-s...--...), whose basename no longer appears in the
-        # human-named source URLs -- causing the basename filter below to drop
-        # every prov:Location.  Keep the original filepath for get_urls and the
-        # basename filter, matching legacy addGitAnnexSources behavior.
-        bids_root = os.path.realpath(bids_root)
+        # Pass bids_root and filepath through UNCHANGED, exactly as the legacy
+        # addGitAnnexSources does -- do NOT realpath/resolve either one:
+        #   * resolving the FILE follows the git-annex working-tree symlink to
+        #     the annex object (SHA256E-s...), whose basename no longer matches
+        #     the human-named source URLs, so the basename filter drops them;
+        #   * resolving the repo ROOT while the queried file paths remain under
+        #     the original (possibly symlinked) mount makes git-annex's lookup
+        #     miss on symlinked dataset storage (HPC automounts / shared
+        #     filesystems), silently dropping every prov:Location.
+        # The caller already passes an abspath (not a resolved) bids_root, which
+        # stays consistent with the pybids-provided file paths.
         repo = AnnexRepo(bids_root, create=False)
         if filepath is not None:
             sources = repo.get_urls(filepath)

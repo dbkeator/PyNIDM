@@ -1031,7 +1031,14 @@ def bidsmri2project(
 
     _apply_dataset_description(project, collection, dataset)
 
-    bids_root = Path(directory).resolve()
+    # Use abspath (NOT resolve()) so we do NOT follow symlinks: pybids builds its
+    # layout from the unresolved *directory*, so the scan paths it returns stay
+    # under that (possibly symlinked) mount.  If bids_root resolved symlinks
+    # while the file paths didn't, git-annex's whereis lookup (and bids::
+    # relative filenames) would mismatch on symlinked dataset storage (HPC
+    # automounts / shared filesystems) and silently drop prov:Location source
+    # URLs.  This matches legacy bidsmri2nidm, which uses os.path.abspath.
+    bids_root = Path(os.path.abspath(directory))
     sessions_by_subj: Dict[str, Session] = {}
     persons_by_subj: Dict[str, Person] = {}
 
