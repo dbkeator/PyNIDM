@@ -358,7 +358,15 @@ def add_git_annex_sources(obj, bids_root, filepath: Optional[str] = None) -> int
             matches = sources
 
         for match in matches:
-            obj.graph.add((obj.identifier, PROV["Location"], URIRef(match)))
+            # Emit the source URL as an xsd:string LITERAL (not a URIRef) to
+            # match legacy addGitAnnexSources: legacy passes a URIRef through
+            # prov-toolbox, which serializes it as an xsd:string literal, and the
+            # entire existing NIDM corpus (and downstream queries) carry
+            # prov:Location as a string.  Keeping the literal form here makes the
+            # graphs byte-identical rather than only typed-shape equivalent.
+            obj.graph.add(
+                (obj.identifier, PROV["Location"], Literal(match, datatype=XSD.string))
+            )
 
         return len(sources)
     except Exception as exc:
