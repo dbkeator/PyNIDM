@@ -72,7 +72,11 @@ from ...core import bids_constants as BIDS_Constants
 from ...core.namespaces import BIDS, NFO, PROV, RDFS, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
-__version__ = "0.6.0"  # Phase E: pybids discovery + events.tsv + DWI bval/bvec
+# Matches the legacy bidsmri2nidm tool version: this is a LinkML reimplementation
+# whose NIDM output is graph-equivalent to the legacy converter (validated by the
+# legacy-vs-linkml typed-shape parity gate).  Bump this only when the emitted
+# graph model actually changes relative to legacy.
+__version__ = "1.0.0"
 _log = logging.getLogger(__name__)
 
 
