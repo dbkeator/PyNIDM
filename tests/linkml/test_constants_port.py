@@ -253,7 +253,25 @@ def test_participants_keys_match():
 
 
 def test_scans_keys_match():
-    assert set(new_bids.scans.keys()) == set(_legacy_bids.scans.keys())
+    # The linkml converter resolves field-map image usage via
+    # _resolve_image_usage() (hadImageUsageType nidm:FieldMap), NOT via the
+    # scans table, so the linkml port intentionally omits the BIDS field-map
+    # suffix keys that legacy uses for hadImageContrastType.  Adding them to the
+    # linkml scans table makes _apply_scan_contrast_and_usage emit an extra
+    # FieldMap contrast triple that breaks legacy-vs-linkml fieldmap parity.
+    # All non-fieldmap keys must still match exactly.
+    _FIELDMAP_ONLY = {
+        "fmap",
+        "fieldmap",
+        "epi",
+        "phasediff",
+        "phase1",
+        "phase2",
+        "magnitude",
+        "magnitude1",
+        "magnitude2",
+    }
+    assert set(new_bids.scans.keys()) == set(_legacy_bids.scans.keys()) - _FIELDMAP_ONLY
 
 
 def test_scans_uris_match():

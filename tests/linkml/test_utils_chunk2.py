@@ -9,7 +9,8 @@ implementation).
 """
 from __future__ import annotations
 from unittest.mock import patch
-from rdflib import Graph, URIRef
+from rdflib import Graph, Literal
+from rdflib.namespace import XSD
 from nidm.linkml.core.namespaces import PROV
 from nidm.linkml.experiment import utils
 from nidm.linkml.experiment.core import Core
@@ -82,11 +83,13 @@ def test_add_git_annex_sources_emits_prov_location_per_match():
     assert count == 3
 
     # But only the two containing 'sub-01_T1w.nii.gz' become triples.
+    # prov:Location is emitted as an xsd:string literal to match the legacy
+    # (prov-toolbox) serialization -- i.e. `"<url>"^^xsd:string`, not an IRI.
     locations = list(obj.graph.objects(obj.identifier, PROV["Location"]))
     assert len(locations) == 2
-    assert URIRef(fake_urls[0]) in locations
-    assert URIRef(fake_urls[1]) in locations
-    assert URIRef(fake_urls[2]) not in locations
+    assert Literal(fake_urls[0], datatype=XSD.string) in locations
+    assert Literal(fake_urls[1], datatype=XSD.string) in locations
+    assert Literal(fake_urls[2], datatype=XSD.string) not in locations
 
 
 def test_add_git_annex_sources_with_no_filepath_adds_all_sources():
