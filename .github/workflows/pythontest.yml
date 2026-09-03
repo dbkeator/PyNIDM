@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - linkml-refactor
   pull_request:
 
 jobs:
