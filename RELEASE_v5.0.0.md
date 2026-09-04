@@ -27,16 +27,18 @@ change the modeled content of your NIDM documents (see *Graph parity* below).
   external FSL, FreeSurfer, and ANTs segmentation-to-NIDM tools are now thin
   adapters over this one API, so all derived results share an identical,
   queryable model.
-- **First-class field maps.** A `nidm:FieldMap` image-usage type is emitted for
-  field-map acquisitions, including the proper `fmap/` location and the
-  ABIDE-II-style case where a field map is misplaced inside `dwi/` (it is no
-  longer mislabeled `DiffusionWeighted`).
+- **First-class field maps.** Field-map acquisitions in `fmap/` are captured with
+  a dedicated image-usage type, including the ABIDE-II case where a field map is
+  misplaced inside `dwi/` (so it is no longer mislabeled `DiffusionWeighted`).
+  *(Final field-map term names are being coordinated with the NIDM-Experiment
+  maintainers and will be reflected here at release.)*
 - **Natural-language query.** `pynidm queryai` translates plain-language
   questions into SPARQL over NIDM documents. The LLM backends are optional and
   imported lazily; install them with the new `queryai` extra.
-- **Graph-parity test harness.** A typed-shape multiset comparator
-  (`scripts/parity_compare.py`) proves legacy-vs-LinkML isomorphism up to
-  volatile identifiers, timestamps, and versions, and guards correctness in CI.
+- **Validated by graph isomorphism.** During the migration, a typed-shape
+  multiset comparator verified that the LinkML converters reproduce the legacy
+  4.x outputs exactly (up to volatile identifiers, timestamps, and versions) on
+  full, real datasets — see *Graph parity* below.
 
 ## Graph parity (validation)
 
@@ -50,8 +52,8 @@ comparator on full, real datasets; all pass with identical typed-shape multisets
 | ADHD-200 — KKI | anat + func + phenotype | PARITY OK — 6,799 typed instances |
 | OpenNeuro ds002674 | multi-session + field maps in `fmap/` (phasediff/magnitude) | PARITY OK — 12,884 typed instances (180/180 FieldMap triples) |
 
-Full test suite: 836 passed. Clean-environment install and CLI smoke (all
-`pynidm query` modes) verified.
+The LinkML test suite passes on Python 3.10–3.12 (CI). Clean-environment
+install and all `pynidm query` modes verified.
 
 ## Representational notes (vs 4.x)
 
@@ -72,18 +74,20 @@ strict, datatype-sensitive term matching are aware:
 
 ## Upgrade / breaking changes
 
+- **The legacy prov-toolbox converter is not part of v5.** The `nidm.experiment`
+  and `nidm.core` packages — and the `prov` dependency — have been removed; v5 is
+  LinkML-only. Code that needs the legacy converter should pin
+  `pip install "pynidm<5"` (the 4.5.4 release) or use the `legacy-4.x` branch.
 - **`pydantic>=2` is now a runtime dependency** (the generated LinkML models use
   Pydantic v2). It installs automatically with `pip install pynidm`.
-- The `pynidm` CLI is now backed by the LinkML core. Command surface and query
+- The `pynidm` CLI is backed by the LinkML core. Command surface and query
   modes (`-p`, `-i`, `-iv`, `-de`, `-debv`, `-bv`, `-gf`, `-u`) are unchanged.
-- The legacy prov-toolbox converter remains available via the `legacy` extra
-  (`pip install "pynidm[legacy]"`) for workflows that still need it.
 - Optional LLM backends for `pynidm queryai`: `pip install "pynidm[queryai]"`.
 
 ## Install
 
 ```
-pip install pynidm                 # core (LinkML)
-pip install "pynidm[legacy]"       # + prov-toolbox legacy converter
+pip install pynidm                 # LinkML core
 pip install "pynidm[queryai]"      # + anthropic/openai backends for queryai
+pip install "pynidm<5"             # the legacy 4.x prov-toolbox line
 ```

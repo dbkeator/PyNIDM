@@ -5,15 +5,10 @@ REST layers, and the queryai/linreg tools -- must import and run with ``prov``
 NOT installed.  We enforce that here by installing an import blocker that makes
 any ``import prov`` (or ``prov.*``) fail, purging cached ``prov``/``nidm``
 modules, and then importing the shipped modules.
-
-This also verifies the legacy reverse-shims (``nidm.experiment.Query`` etc.) are
-importable prov-free, and that accessing a prov-based legacy wrapper without the
-``[legacy]`` extra fails with a helpful message rather than at package import.
 """
 from __future__ import annotations
 import importlib
 import sys
-import pytest
 
 
 class _ProvBlocker:
@@ -58,28 +53,6 @@ def test_shipped_linkml_cli_imports_without_prov():
         importlib.import_module("nidm.linkml.experiment.tools.nidm_file_utils")
         # prov must not have been pulled in transitively
         assert "prov" not in sys.modules
-        return True
-
-    assert _run_without_prov(_imp) is True
-
-
-def test_legacy_reverse_shims_import_without_prov():
-    def _imp():
-        importlib.import_module("nidm.experiment.Query")
-        importlib.import_module("nidm.experiment.CDE")
-        importlib.import_module("nidm.experiment.Navigate")
-        importlib.import_module("nidm.experiment.tools.rest")
-        assert "prov" not in sys.modules
-        return True
-
-    assert _run_without_prov(_imp) is True
-
-
-def test_legacy_wrapper_access_without_prov_gives_helpful_error():
-    def _imp():
-        experiment = importlib.import_module("nidm.experiment")
-        with pytest.raises(ImportError, match=r"pynidm\[legacy\]"):
-            _ = experiment.Project
         return True
 
     assert _run_without_prov(_imp) is True

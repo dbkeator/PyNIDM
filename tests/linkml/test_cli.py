@@ -41,7 +41,7 @@ def test_cli_registers_graph_tools() -> None:
 def test_cli_registers_linear_regression() -> None:
     """The linear_regression command is registered on the cli group via the
     re-registration shim over the legacy command."""
-    from nidm.experiment.tools.nidm_linreg import linear_regression
+    from nidm.linkml.experiment.tools.nidm_linreg import linear_regression
 
     assert linear_regression.name in cli.commands
 
