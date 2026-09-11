@@ -187,7 +187,7 @@ PyNIDM/
 └── pyproject.toml / setup.cfg / tox.ini   # build + lint config
 ```
 
-The cardinal rule banked from the refactor: **`src/nidm/experiment/schema/nidm_schema.yaml`
+The cardinal rule banked from the refactor: **`src/nidm/linkml/schema/nidm_schema.yaml`
 is the single source of truth.**  Pydantic classes are *generated* from it.
 Wrappers introspect those generated classes to drive RDF emission.  If
 you need a new slot or class, edit the schema, regenerate, then write
@@ -204,7 +204,7 @@ python scripts/regen_schema.py
 ```
 
 This runs `gen-pydantic` (from the `linkml` package) against
-`src/nidm/experiment/schema/nidm_schema.yaml` and writes the result to
+`src/nidm/linkml/schema/nidm_schema.yaml` and writes the result to
 `src/nidm/linkml/generated/nidm_schema_pydantic.py`.  It also rebuilds
 the `nidm_schema_meta.py` sidecar that the wrapper layer uses for
 enum-meaning lookup and field-to-enum mapping.

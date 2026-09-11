@@ -2,7 +2,7 @@
 """
 Regenerate Pydantic dataclasses from the NIDM LinkML schema.
 
-Reads:   src/nidm/experiment/schema/nidm_schema.yaml
+Reads:   src/nidm/linkml/schema/nidm_schema.yaml
 Writes:  src/nidm/linkml/generated/nidm_schema_pydantic.py
 
 This script is the single source of truth for regenerating the Pydantic
@@ -30,7 +30,7 @@ import sys
 from textwrap import dedent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO_ROOT / "src" / "nidm" / "experiment" / "schema" / "nidm_schema.yaml"
+SCHEMA_PATH = REPO_ROOT / "src" / "nidm" / "linkml" / "schema" / "nidm_schema.yaml"
 OUTPUT_PATH = (
     REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_pydantic.py"
 )
@@ -66,7 +66,7 @@ HEADER_TEMPLATE = dedent(
 
         python scripts/regen_schema.py
 
-    Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+    Source schema:   src/nidm/linkml/schema/nidm_schema.yaml
     Generated with:  linkml {linkml_version}
     """
     # ruff: noqa  -- generated file
@@ -155,7 +155,7 @@ def _write_meta_module() -> None:
         "",
         "    python scripts/regen_schema.py",
         "",
-        "Source schema:   src/nidm/experiment/schema/nidm_schema.yaml",
+        "Source schema:   src/nidm/linkml/schema/nidm_schema.yaml",
         f"Generated with:  linkml {_linkml_version()}",
         "",
         "gen-pydantic does not preserve permissible_value ``meaning:`` URIs or",
