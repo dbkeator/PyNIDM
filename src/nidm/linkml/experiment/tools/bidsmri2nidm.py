@@ -632,6 +632,26 @@ def _load_sidecar_metadata(scan_path: Path) -> dict:
         return {}
 
 
+def _scan_metadata(bids_layout, scan_path: Path) -> dict:
+    """Return BIDS-inheritance-merged sidecar metadata for *scan_path*.
+
+    Uses pybids' ``BIDSLayout.get_metadata``, which implements the BIDS
+    inheritance principle -- merging dataset-root, session-, and
+    scan-level JSON for any suffix/task/session.  This replaces the older
+    per-scan sidecar read plus the hardcoded ``T1w.json`` /
+    ``task-rest_bold.json`` root descent (which only covered T1w anat and
+    rest func).  Falls back to a direct sidecar read when pybids returns
+    nothing (e.g. a file not present in the layout index).
+    """
+    try:
+        meta = bids_layout.get_metadata(str(scan_path)) or {}
+    except Exception:  # pragma: no cover -- pybids version/edge-case guard
+        meta = {}
+    if not meta:
+        meta = _load_sidecar_metadata(scan_path)
+    return meta
+
+
 def _apply_json_keys(obj, metadata: dict) -> None:
     """Map BIDS sidecar JSON keys to NIDM predicates on *obj*.
 
@@ -710,62 +730,13 @@ def _emit_sha512_triple(
         )
 
 
-def _maybe_apply_root_level_json(
-    obj, directory: str, json_filename: str, img_session: Optional[str] = None
-) -> None:
-    """Load *directory/json_filename* (or session-specific variant) and
-    apply :data:`BIDS_Constants.json_keys` mappings to *obj*.
-
-    Falls back silently when neither file exists.  Used for the
-    legacy T1w.json / task-rest_bold.json descent at BIDS root.
-    """
-    root_path = os.path.join(directory, json_filename)
-    payload: Optional[dict] = None
-    if os.path.isfile(root_path):
-        try:
-            with open(root_path, encoding="utf-8") as f:
-                payload = json.load(f)
-        except OSError:
-            payload = None
-    elif img_session is not None:
-        ses_path = os.path.join(directory, f"ses-{img_session}_{json_filename}")
-        if os.path.isfile(ses_path):
-            try:
-                with open(ses_path, encoding="utf-8") as f:
-                    payload = json.load(f)
-            except OSError:
-                payload = None
-    if not payload:
-        return
-    for key, value in payload.items():
-        if key not in BIDS_Constants.json_keys:
-            continue
-        predicate = BIDS_Constants.json_keys[key]
-        if isinstance(value, list):
-            obj.graph.add(
-                (obj.identifier, predicate, Literal(",".join(map(str, value))))
-            )
-        else:
-            obj.graph.add((obj.identifier, predicate, Literal(value)))
-
-
-# Map BIDS datatype name -> the root-level JSON filename the legacy
-# tool reads for that datatype.  Only datatypes that have a real
-# descent target are listed; others fall through to no-op.
-_ROOT_LEVEL_JSON_BY_DATATYPE = {
-    "anat": "T1w.json",
-    "func": "task-rest_bold.json",
-}
-
-
 def _process_scan_file(
     scan_path: Path,
     modality_name: str,
     acq,  # noqa: U100 -- accepted for events.tsv attachment in Phase D
     obj,
-    directory: str,
     bids_root: Path,
-    img_session: Optional[str] = None,
+    bids_layout,
 ) -> None:
     """Attach per-scan metadata to *obj* (the AcquisitionObject wrapper).
 
@@ -775,17 +746,14 @@ def _process_scan_file(
       * contrast/usage type via BIDS_Constants.scans
       * sha512 hash via getsha512 (when file is non-empty)
       * git-annex sources via add_git_annex_sources
-      * sidecar JSON descent (sub-XX_T1w.json next to the scan)
-      * root-level T1w.json / task-rest_bold.json descent
+      * sidecar JSON via pybids ``get_metadata`` -- BIDS inheritance-merged
+        (dataset-root + session + scan level, any suffix/task/session)
     """
     suffix = _suffix_from_filename(scan_path.name) or ""
     _apply_scan_contrast_and_usage(obj, suffix, modality_name)
     _emit_sha512_triple(obj, scan_path, bids_root)
     add_git_annex_sources(obj=obj, filepath=str(scan_path), bids_root=str(bids_root))
-    _apply_json_keys(obj, _load_sidecar_metadata(scan_path))
-    root_json = _ROOT_LEVEL_JSON_BY_DATATYPE.get(modality_name)
-    if root_json is not None:
-        _maybe_apply_root_level_json(obj, directory, root_json, img_session)
+    _apply_json_keys(obj, _scan_metadata(bids_layout, scan_path))
 
 
 def _emit_run_entity(obj, entities: dict) -> None:
@@ -854,8 +822,9 @@ def _attach_events_file(
     if events_path is None:
         return
 
-    # TaskName: prefer the bold sidecar's value, fall back to the task entity.
-    metadata = _load_sidecar_metadata(bold_path)
+    # TaskName: prefer the bold metadata value (BIDS inheritance-merged),
+    # fall back to the task entity.
+    metadata = _scan_metadata(bids_layout, bold_path)
     task_name = metadata.get("TaskName", file_tpl.entities.get("task"))
 
     events_obj = AcquisitionObject(acq, filename=_bids_filename(events_path, bids_root))
@@ -941,7 +910,6 @@ def addimagingsessions(
     bare_id: str,
     session: Session,
     person: Person,
-    directory: str,
     bids_root: Path,
     collection: Collection,
     img_session: Optional[str] = None,
@@ -950,8 +918,9 @@ def addimagingsessions(
     *bare_id*, using pybids ``BIDSLayout`` for scan discovery + metadata.
 
     Layers per-scan attributes (contrast/usage, sha512, git-annex,
-    sidecar + root-level JSON) onto each AcquisitionObject, then attaches
-    events.tsv objects for func scans and bval/bvec objects for dwi scans.
+    BIDS-inheritance-merged sidecar JSON via get_metadata) onto each
+    AcquisitionObject, then attaches events.tsv objects for func scans
+    and bval/bvec objects for dwi scans.
     """
     get_kwargs = {"subject": bare_id, "extension": [".nii", ".nii.gz"]}
     if img_session is not None:
@@ -984,9 +953,8 @@ def addimagingsessions(
             modality_name=datatype,
             acq=acq,
             obj=obj,
-            directory=directory,
             bids_root=bids_root,
-            img_session=img_session,
+            bids_layout=bids_layout,
         )
         _emit_run_entity(obj, entities)
 
@@ -1130,7 +1098,6 @@ def bidsmri2project(
                     bare_id=bare_id,
                     session=ses,
                     person=person,
-                    directory=directory,
                     bids_root=bids_root,
                     collection=collection,
                     img_session=img_session,
@@ -1149,7 +1116,6 @@ def bidsmri2project(
                 bare_id=bare_id,
                 session=session,
                 person=person,
-                directory=directory,
                 bids_root=bids_root,
                 collection=collection,
             )

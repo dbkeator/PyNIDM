@@ -733,8 +733,9 @@ def test_root_level_t1w_json_descent(tmp_path: Path):
 
 
 def test_per_scan_sidecar_takes_precedence_over_root(tmp_path: Path):
-    """When both root T1w.json and per-scan sidecar are present, both
-    contribute triples (rdflib graphs are sets so duplicates collapse)."""
+    """Per-scan sidecar overrides the dataset-root value per the BIDS
+    inheritance principle (via pybids ``get_metadata``): the scan-level
+    Manufacturer wins and the root value does not appear."""
     from nidm.linkml.core.namespaces import DICOM
 
     _write_dataset_description(tmp_path)
@@ -745,8 +746,8 @@ def test_per_scan_sidecar_takes_precedence_over_root(tmp_path: Path):
     g = project.graph
     obj = list(g.subjects(RDF.type, NIDM.AcquisitionObject))[0]
     manus = {str(m) for m in g.objects(obj, DICOM["Manufacturer"])}
-    # Both Siemens (sidecar) and GE (root) appear.
-    assert manus == {"Siemens", "GE"}
+    # Scan-level sidecar (Siemens) overrides the root value (GE).
+    assert manus == {"Siemens"}
 
 
 def test_acquisition_object_is_collection_member(tmp_path: Path):
