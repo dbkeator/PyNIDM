@@ -63,11 +63,12 @@ scans = {
     "asl": Constants.NIDM_MRI_ASL,
     # NOTE: the BIDS field-map suffixes (fmap/fieldmap/epi/phasediff/phase1/
     # phase2/magnitude/magnitude1/magnitude2) are intentionally NOT in this
-    # table.  The linkml converter resolves field-map image usage via
-    # _resolve_image_usage() in bidsmri2nidm (hadImageUsageType nidm:FieldMap),
-    # NOT via this scans table.  Adding them here would make
-    # _apply_scan_contrast_and_usage emit an extra hadImageContrastType FieldMap
-    # triple that diverges from the tuned legacy-vs-linkml fieldmap parity.
+    # table.  The linkml converter models field maps directly in bidsmri2nidm:
+    # _resolve_image_usage() sets hadImageUsageType nidm:DistortionCorrection
+    # and _FMAP_SUFFIX_TO_RDF_TYPE stamps rdf:type nidm:B0FieldMap (the primary
+    # field map) or dctype:Image (its magnitude/phase/EPI images).  This is NOT
+    # driven by this scans table; adding these keys here would make
+    # _apply_scan_contrast_and_usage emit a spurious hadImageContrastType.
     # (Legacy carries these keys because its converter DOES use the scans table.)
 }
 

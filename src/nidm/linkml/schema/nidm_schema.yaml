@@ -72,7 +72,12 @@ enums:
         meaning: nidm:ArterialSpinLabeling
 
   ImageUsageTypeEnum:
-    description: Intended usage of an acquired image
+    description: >-
+      Intended usage of an acquired image.  Note the distinction (per the
+      NIDM field-map modeling) between what an object *is* (its rdf:type,
+      e.g. nidm:B0FieldMap or dctype:Image, stamped by the converter) and
+      what it is *for* (its hadImageUsageType).  Field-map acquisition
+      objects carry DistortionCorrection usage.
     permissible_values:
       Anatomical:
         meaning: nidm:Anatomical
@@ -80,8 +85,8 @@ enums:
         meaning: nidm:Functional
       DiffusionWeighted:
         meaning: nidm:DiffusionWeighted
-      FieldMap:
-        meaning: nidm:FieldMap
+      DistortionCorrection:
+        meaning: nidm:DistortionCorrection
 
 # ---------------------------------------------------------------------------
 # Classes

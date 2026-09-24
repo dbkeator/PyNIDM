@@ -5,7 +5,7 @@ DO NOT EDIT BY HAND.  Regenerate with::
 
     python scripts/regen_schema.py
 
-Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+Source schema:   src/nidm/linkml/schema/nidm_schema.yaml
 Generated with:  linkml 1.11.1
 """
 # ruff: noqa  -- generated file
@@ -335,7 +335,7 @@ linkml_meta = LinkMLMeta({'annotations': {'graph_hierarchy': {'tag': 'graph_hier
                           'prefix_reference': 'http://semanticscience.org/ontology/sio.owl#'},
                   'xsd': {'prefix_prefix': 'xsd',
                           'prefix_reference': 'http://www.w3.org/2001/XMLSchema#'}},
-     'source_file': '/Users/dkeator/Documents/Coding/PyNIDM/src/nidm/experiment/schema/nidm_schema.yaml',
+     'source_file': '/Users/dkeator/Documents/Coding/PyNIDM/src/nidm/linkml/schema/nidm_schema.yaml',
      'title': 'NIDM-Experiment Schema'} )
 
 class AcquisitionModalityEnum(str, Enum):
@@ -361,12 +361,12 @@ class ImageContrastTypeEnum(str, Enum):
 
 class ImageUsageTypeEnum(str, Enum):
     """
-    Intended usage of an acquired image
+    Intended usage of an acquired image.  Note the distinction (per the NIDM field-map modeling) between what an object *is* (its rdf:type, e.g. nidm:B0FieldMap or dctype:Image, stamped by the converter) and what it is *for* (its hadImageUsageType).  Field-map acquisition objects carry DistortionCorrection usage.
     """
     Anatomical = "Anatomical"
     Functional = "Functional"
     DiffusionWeighted = "DiffusionWeighted"
-    FieldMap = "FieldMap"
+    DistortionCorrection = "DistortionCorrection"
 
 
 

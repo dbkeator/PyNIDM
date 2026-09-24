@@ -248,6 +248,55 @@ def test_bold_scan_emits_functional_usage(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Field-map scans -> B0FieldMap / dctype:Image + DistortionCorrection usage
+# ---------------------------------------------------------------------------
+
+
+def _write_fmap_scans(bids_root: Path, subject: str = "sub-01") -> None:
+    """Write a primary field map + magnitude + phasediff under fmap/."""
+    fmap = bids_root / subject / "fmap"
+    fmap.mkdir(parents=True, exist_ok=True)
+    for suffix in ("fieldmap", "magnitude", "phasediff"):
+        (fmap / f"{subject}_{suffix}.nii.gz").write_bytes(b"")
+
+
+def _obj_by_filename_suffix(g, suffix: str):
+    """Return the AcquisitionObject whose nfo:filename ends with *suffix*."""
+    for obj in g.subjects(RDF.type, NIDM.AcquisitionObject):
+        for fn in g.objects(obj, NFO.filename):
+            if str(fn).endswith(f"_{suffix}.nii.gz"):
+                return obj
+    raise AssertionError(f"no AcquisitionObject with filename suffix {suffix!r}")
+
+
+def test_fieldmap_scan_emits_b0fieldmap_type_and_distortion_usage(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_fmap_scans(tmp_path)
+    g = _build_project(tmp_path).graph
+
+    obj = _obj_by_filename_suffix(g, "fieldmap")
+    # Type says what it *is*: a B0 field map.
+    assert NIDM.B0FieldMap in set(g.objects(obj, RDF.type))
+    # Usage says what it is *for*: distortion correction.
+    assert list(g.objects(obj, NIDM.hadImageUsageType)) == [NIDM.DistortionCorrection]
+
+
+def test_fieldmap_support_images_typed_dctype_image(tmp_path: Path):
+    _write_dataset_description(tmp_path)
+    _write_fmap_scans(tmp_path)
+    g = _build_project(tmp_path).graph
+
+    for suffix in ("magnitude", "phasediff"):
+        obj = _obj_by_filename_suffix(g, suffix)
+        types = set(g.objects(obj, RDF.type))
+        assert DCTYPES.Image in types, f"{suffix} should be dctype:Image"
+        assert NIDM.B0FieldMap not in types, f"{suffix} is not a B0FieldMap"
+        assert list(g.objects(obj, NIDM.hadImageUsageType)) == [
+            NIDM.DistortionCorrection
+        ]
+
+
+# ---------------------------------------------------------------------------
 # PET scan -> PET modality
 # ---------------------------------------------------------------------------
 

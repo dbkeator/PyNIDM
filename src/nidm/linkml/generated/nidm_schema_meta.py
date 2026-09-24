@@ -5,7 +5,7 @@ DO NOT EDIT BY HAND.  Regenerate with::
 
     python scripts/regen_schema.py
 
-Source schema:   src/nidm/experiment/schema/nidm_schema.yaml
+Source schema:   src/nidm/linkml/schema/nidm_schema.yaml
 Generated with:  linkml 1.11.1
 
 gen-pydantic does not preserve permissible_value ``meaning:`` URIs or
@@ -28,7 +28,7 @@ ENUM_MEANINGS = {
     ('ImageContrastTypeEnum', 'T2Weighted'): 'nidm:T2Weighted',
     ('ImageUsageTypeEnum', 'Anatomical'): 'nidm:Anatomical',
     ('ImageUsageTypeEnum', 'DiffusionWeighted'): 'nidm:DiffusionWeighted',
-    ('ImageUsageTypeEnum', 'FieldMap'): 'nidm:FieldMap',
+    ('ImageUsageTypeEnum', 'DistortionCorrection'): 'nidm:DistortionCorrection',
     ('ImageUsageTypeEnum', 'Functional'): 'nidm:Functional',
 }
 

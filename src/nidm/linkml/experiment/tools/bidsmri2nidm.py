@@ -69,7 +69,7 @@ from ..utils import (
     map_variables_to_terms,
 )
 from ...core import bids_constants as BIDS_Constants
-from ...core.namespaces import BIDS, NFO, PROV, RDFS, SIO
+from ...core.namespaces import BIDS, DCTYPES, NFO, NIDM, PROV, RDFS, SIO
 from ...generated.nidm_schema_pydantic import ImageContrastTypeEnum, ImageUsageTypeEnum
 
 # Matches the legacy bidsmri2nidm tool version: this is a LinkML reimplementation
@@ -103,9 +103,9 @@ _DIRECTORY_TO_USAGE = {
     "dwi": ImageUsageTypeEnum.DiffusionWeighted,
 }
 
-#: BIDS fieldmap suffixes.  These carry FieldMap usage regardless of the
-#: directory they live in -- some datasets (e.g. ABIDE II) place _fieldmap
-#: scans inside dwi/ rather than fmap/, and they must NOT be labeled
+#: BIDS fieldmap suffixes.  These carry DistortionCorrection usage regardless
+#: of the directory they live in -- some datasets (e.g. ABIDE II) place
+#: _fieldmap scans inside dwi/ rather than fmap/, and they must NOT be labeled
 #: DiffusionWeighted.
 _FIELDMAP_SUFFIXES = frozenset(
     {
@@ -121,16 +121,35 @@ _FIELDMAP_SUFFIXES = frozenset(
 )
 
 
+#: BIDS fieldmap suffix -> rdf:type for the acquisition object.  Per the NIDM
+#: field-map model, the *type* says what the object is and the *usage*
+#: (DistortionCorrection, below) says what it is for.  The primary field map
+#: is a nidm:B0FieldMap; the magnitude/phase/EPI images that accompany it are
+#: plain dctype:Image objects.
+_FMAP_SUFFIX_TO_RDF_TYPE = {
+    "fieldmap": NIDM["B0FieldMap"],
+    "magnitude": DCTYPES["Image"],
+    "magnitude1": DCTYPES["Image"],
+    "magnitude2": DCTYPES["Image"],
+    "epi": DCTYPES["Image"],
+    "phase1": DCTYPES["Image"],
+    "phase2": DCTYPES["Image"],
+    "phasediff": DCTYPES["Image"],
+}
+
+
 def _resolve_image_usage(datatype, suffix):
     """Return the ``ImageUsageTypeEnum`` for a scan.
 
-    Decided by the BIDS *suffix* first so a fieldmap scan is labeled
-    ``FieldMap`` even when it lives in a ``dwi/`` directory; otherwise it
-    falls back to the modality directory (anat/func/dwi).  Files in an
-    explicit ``fmap/`` directory are also ``FieldMap``.
+    Decided by the BIDS *suffix* first so a fieldmap scan is labeled by its
+    intended use even when it lives in a ``dwi/`` directory; otherwise it
+    falls back to the modality directory (anat/func/dwi).  Field-map scans
+    (by suffix, or an explicit ``fmap/`` directory) are all used for
+    ``DistortionCorrection``; their rdf:type (nidm:B0FieldMap vs
+    dctype:Image) is stamped separately via ``_FMAP_SUFFIX_TO_RDF_TYPE``.
     """
     if suffix in _FIELDMAP_SUFFIXES or datatype == "fmap":
-        return ImageUsageTypeEnum.FieldMap
+        return ImageUsageTypeEnum.DistortionCorrection
     return _DIRECTORY_TO_USAGE.get(datatype)
 
 
@@ -690,13 +709,19 @@ def _apply_scan_contrast_and_usage(obj, suffix: str, datatype: str) -> None:
             suffix,
         )
     # Usage: fieldmap scans (by suffix, or an explicit fmap/ directory)
-    # already have their FieldMap usage set on the MRObject constructor via
-    # _resolve_image_usage.  Do NOT also stamp the directory-based usage here,
-    # or a _fieldmap scan living in dwi/ ends up with BOTH FieldMap and
-    # DiffusionWeighted.  Non-fieldmap scans still get the datatype-based usage
-    # (this is the only path that emits usage for e.g. asl).
+    # already have their DistortionCorrection usage set on the MRObject
+    # constructor via _resolve_image_usage.  Do NOT also stamp the
+    # directory-based usage here, or a _fieldmap scan living in dwi/ ends up
+    # with BOTH DistortionCorrection and DiffusionWeighted.  Instead we stamp
+    # the field-map rdf:type here: the primary field map -> nidm:B0FieldMap,
+    # its magnitude/phase/EPI images -> dctype:Image (per the NIDM field-map
+    # model: type = what it is, usage = what it is for).  Non-fieldmap scans
+    # still get the datatype-based usage (this is the only path that emits
+    # usage for e.g. asl).
     if suffix in _FIELDMAP_SUFFIXES or datatype == "fmap":
-        pass
+        rdf_type = _FMAP_SUFFIX_TO_RDF_TYPE.get(suffix)
+        if rdf_type is not None:
+            obj.graph.add((obj.identifier, RDF.type, rdf_type))
     elif datatype in BIDS_Constants.scans:
         obj.graph.add(
             (obj.identifier, _C.NIDM_IMAGE_USAGE_TYPE, BIDS_Constants.scans[datatype])
