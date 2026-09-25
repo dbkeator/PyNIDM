@@ -5,7 +5,7 @@ nidm.linkml — RDFLib + LinkML implementation of PyNIDM
 This package is the maintainable, prov-toolbox-free reimplementation of
 PyNIDM.  It is built on:
 
-* The NIDM-Experiment LinkML schema at ``src/nidm/experiment/schema/nidm_schema.yaml``
+* The NIDM-Experiment LinkML schema at ``src/nidm/linkml/schema/nidm_schema.yaml``
   (source of truth for the data model and Pydantic class generation).
 * ``rdflib`` as the only RDF runtime — graphs, parsing, serialization, and
   SPARQL queries are all handled natively, with no round-trip through the

@@ -28,10 +28,13 @@ change the modeled content of your NIDM documents (see *Graph parity* below).
   adapters over this one API, so all derived results share an identical,
   queryable model.
 - **First-class field maps.** Field-map acquisitions in `fmap/` are captured with
-  a dedicated image-usage type, including the ABIDE-II case where a field map is
-  misplaced inside `dwi/` (so it is no longer mislabeled `DiffusionWeighted`).
-  *(Final field-map term names are being coordinated with the NIDM-Experiment
-  maintainers and will be reflected here at release.)*
+  an explicit type-and-usage model coordinated with the NIDM-Experiment
+  maintainers: the object's `rdf:type` says what it *is* — `nidm:B0FieldMap` for
+  the primary field map, `dctype:Image` for its magnitude/phase/EPI companion
+  images — while `nidm:hadImageUsageType nidm:DistortionCorrection` says what it
+  is *for*. This includes the ABIDE-II case where a field map is misplaced inside
+  `dwi/` (the suffix wins, so it is typed `nidm:B0FieldMap`, not
+  `DiffusionWeighted`).
 - **Natural-language query.** `pynidm queryai` translates plain-language
   questions into SPARQL over NIDM documents. The LLM backends are optional and
   imported lazily; install them with the new `queryai` extra.
@@ -50,7 +53,14 @@ comparator on full, real datasets; all pass with identical typed-shape multisets
 | ABIDE I — Caltech | anat + resting func | PARITY OK — 6,635 typed instances |
 | ABIDE II — NYU_1 | anat + func + multi-run DWI + field maps + multi-session | PARITY OK — 42,211 typed instances |
 | ADHD-200 — KKI | anat + func + phenotype | PARITY OK — 6,799 typed instances |
-| OpenNeuro ds002674 | multi-session + field maps in `fmap/` (phasediff/magnitude) | PARITY OK — 12,884 typed instances (180/180 FieldMap triples) |
+| OpenNeuro ds002674 | multi-session + field maps in `fmap/` (phasediff/magnitude) | PARITY OK — 12,884 typed instances (180/180 fmap objects typed `dctype:Image` + `DistortionCorrection`) |
+
+Parity was measured against the interim field-map representation the two
+converters shared during the migration. As a deliberate v5 refinement, field
+maps now use the finalized `nidm:B0FieldMap` / `dctype:Image` + `nidm:DistortionCorrection`
+model described above — the one place v5 intentionally does **not** reproduce
+the 4.x output. All non-fmap instances remain byte-for-byte parity (up to
+volatile identifiers, timestamps, and versions).
 
 The LinkML test suite passes on Python 3.10–3.12 (CI). Clean-environment
 install and all `pynidm query` modes verified.

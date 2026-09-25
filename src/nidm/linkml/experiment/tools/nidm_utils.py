@@ -1,9 +1,33 @@
 """ Tools for working with NIDM-Experiment files (LinkML native) """
 
 from argparse import ArgumentParser
+import logging
+import os
 import os.path
 from rdflib import Graph, util
 from nidm.linkml.experiment.utils import read_nidm
+
+_log = logging.getLogger(__name__)
+
+
+def _writable_output_dir(preferred_dir: str) -> str:
+    """Return *preferred_dir* if it's writable, else fall back to the current
+    working directory.
+
+    ``visualize`` and ``jsonld`` write their output next to each input NIDM
+    file, but the input may live in a read-only tree (e.g. a datalad/git-annex
+    checkout).  Rather than crash, fall back to CWD and warn.
+    """
+    target = preferred_dir or os.getcwd()
+    if os.access(target, os.W_OK):
+        return target
+    cwd = os.getcwd()
+    _log.warning(
+        "Input directory %s is not writable; writing output to %s instead.",
+        target,
+        cwd,
+    )
+    return cwd
 
 
 def main():
@@ -65,18 +89,23 @@ def main():
             project = read_nidm(nidm_file)
 
             # split path and filename for output file writing; the prov-free
-            # renderer (Core.save_DotGraph) writes <basename>.pdf next to it
+            # renderer (Core.save_DotGraph) writes <basename>.pdf next to it.
+            # Fall back to CWD if the input directory is read-only.
             file_parts = os.path.split(nidm_file)
-            base_path = os.path.join(file_parts[0], os.path.splitext(file_parts[1])[0])
+            out_dir = _writable_output_dir(file_parts[0])
+            base_path = os.path.join(out_dir, os.path.splitext(file_parts[1])[0])
             project.save_DotGraph(filename=base_path, format="pdf")
 
     elif args.command == "jsonld":
         for nidm_file in args.nidm_files:
             project = read_nidm(nidm_file)
-            # serialize to jsonld
-            with open(
-                os.path.splitext(nidm_file)[0] + ".json", "w", encoding="utf-8"
-            ) as f:
+            # serialize to jsonld next to the input (or CWD if read-only)
+            file_parts = os.path.split(nidm_file)
+            out_dir = _writable_output_dir(file_parts[0])
+            out_json = os.path.join(
+                out_dir, os.path.splitext(file_parts[1])[0] + ".json"
+            )
+            with open(out_json, "w", encoding="utf-8") as f:
                 f.write(project.serializeJSONLD())
 
 

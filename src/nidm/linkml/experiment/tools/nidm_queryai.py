@@ -40,7 +40,9 @@ NDAR = Namespace("https://ndar.nih.gov/api/datadictionary/v2/dataelement/")
 # guess).
 REPROSCHEMA = Namespace("http://schema.repronim.org/")
 
-_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "nidm_schema.json"
+_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "schema" / "nidm_schema.json"
+)
 
 # ---------------------------------------------------------------------------
 # DataElement extraction

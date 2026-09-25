@@ -349,13 +349,27 @@ def add_git_annex_sources(obj, bids_root, filepath: Optional[str] = None) -> int
         #     filesystems), silently dropping every prov:Location.
         # The caller already passes an abspath (not a resolved) bids_root, which
         # stays consistent with the pybids-provided file paths.
-        repo = AnnexRepo(bids_root, create=False)
-        if filepath is not None:
-            sources = repo.get_urls(filepath)
-            matches = [s for s in sources if os.path.basename(filepath) in s]
-        else:
-            sources = repo.get_urls(bids_root)
-            matches = sources
+        #
+        # datalad's batched `git annex whereis` runner logs a scary-looking
+        # ERROR ("N bytes of received undecodable JSON output remain") when a
+        # whereis response is large or arrives in chunks -- e.g. for annex
+        # pointer files whose content isn't present locally.  It's cosmetic (we
+        # still get the URLs, or fall through to the quiet-failure path below),
+        # so quiet datalad's own logger for just the duration of the lookup
+        # rather than surfacing it to the user.
+        _dl_logger = logging.getLogger("datalad")
+        _dl_prev_level = _dl_logger.level
+        _dl_logger.setLevel(logging.CRITICAL)
+        try:
+            repo = AnnexRepo(bids_root, create=False)
+            if filepath is not None:
+                sources = repo.get_urls(filepath)
+                matches = [s for s in sources if os.path.basename(filepath) in s]
+            else:
+                sources = repo.get_urls(bids_root)
+                matches = sources
+        finally:
+            _dl_logger.setLevel(_dl_prev_level)
 
         for match in matches:
             # Emit the source URL as an xsd:string LITERAL (not a URIRef) to

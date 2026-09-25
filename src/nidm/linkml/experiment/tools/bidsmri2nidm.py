@@ -215,15 +215,27 @@ def addbidsignore(directory, filename_to_add) -> None:
     """
     _log.info("Adding file %s to %s/.bidsignore...", filename_to_add, directory)
     bidsignore_path = os.path.join(directory, ".bidsignore")
-    if not isfile(bidsignore_path):
-        with open(bidsignore_path, "w", encoding="utf-8") as text_file:
-            print(filename_to_add, file=text_file)
-        return
-    with open(bidsignore_path, encoding="utf-8") as fp:
-        if filename_to_add in fp.read():
+    try:
+        if not isfile(bidsignore_path):
+            with open(bidsignore_path, "w", encoding="utf-8") as text_file:
+                print(filename_to_add, file=text_file)
             return
-    with open(bidsignore_path, "a", encoding="utf-8") as text_file:
-        print(filename_to_add, file=text_file)
+        with open(bidsignore_path, encoding="utf-8") as fp:
+            if filename_to_add in fp.read():
+                return
+        with open(bidsignore_path, "a", encoding="utf-8") as text_file:
+            print(filename_to_add, file=text_file)
+    except OSError as e:
+        # The BIDS tree may be read-only (e.g. a datalad/git-annex checkout).
+        # Updating .bidsignore is a convenience for downstream BIDS validation,
+        # not part of the NIDM graph, so warn and continue rather than aborting
+        # the whole conversion.
+        _log.warning(
+            "Could not update %s (%s); skipping .bidsignore update. "
+            "The NIDM output was still written.",
+            bidsignore_path,
+            e,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -875,10 +887,17 @@ def _attach_bval_file(bids_layout, file_tpl, acq, collection, bids_root) -> None
     pybids ``get_bval`` (matches legacy behavior)."""
     try:
         bval_name = bids_layout.get_bval(file_tpl.path)
-    except Exception as e:  # pragma: no cover - depends on pybids/data
-        _log.warning("BVAL file missing for %s: %s", file_tpl.path, e)
+    except (IndexError, FileNotFoundError):
+        # pybids raises IndexError when no .bval is associated with the scan.
+        # That's an expected condition for datasets that don't ship gradient
+        # tables, so report it calmly rather than surfacing the raw exception.
+        _log.info("No .bval found for DWI scan %s; skipping bval.", file_tpl.path)
+        return
+    except Exception as e:  # pragma: no cover - unexpected pybids/data error
+        _log.warning("Could not resolve .bval for %s: %s", file_tpl.path, e)
         return
     if not bval_name:
+        _log.info("No .bval found for DWI scan %s; skipping bval.", file_tpl.path)
         return
     bval_path = Path(bval_name)
     if not bval_path.is_absolute():
@@ -985,7 +1004,12 @@ def addimagingsessions(
 
         if datatype == "func":
             _attach_events_file(bids_layout, file_tpl, acq, obj, collection, bids_root)
-        elif datatype == "dwi":
+        elif datatype == "dwi" and suffix == "dwi":
+            # Only genuine diffusion-weighted scans carry .bval/.bvec.  Some
+            # datasets (e.g. ABIDE II) place _fieldmap scans inside dwi/; those
+            # are field maps, not diffusion scans, so we must not probe them for
+            # gradient tables (doing so produced spurious "BVAL file missing"
+            # warnings for every field map).
             _attach_bval_file(bids_layout, file_tpl, acq, collection, bids_root)
             _attach_bvec_files(file_tpl, acq, collection, bids_root)
 

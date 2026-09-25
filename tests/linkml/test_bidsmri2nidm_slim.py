@@ -296,6 +296,33 @@ def test_fieldmap_support_images_typed_dctype_image(tmp_path: Path):
         ]
 
 
+def test_fieldmap_inside_dwi_dir_is_b0fieldmap_not_diffusion(tmp_path: Path):
+    """ABIDE II places _fieldmap scans inside dwi/. The BIDS suffix must win
+    over the directory: such a scan is typed nidm:B0FieldMap (+ DistortionCorrection),
+    never DiffusionWeighted, and it is not probed for .bval/.bvec."""
+    _write_dataset_description(tmp_path)
+    dwi = tmp_path / "sub-01" / "dwi"
+    dwi.mkdir(parents=True, exist_ok=True)
+    # a real diffusion scan (with gradients) alongside a misplaced field map
+    (dwi / "sub-01_dwi.nii.gz").write_bytes(b"")
+    (dwi / "sub-01_dwi.bval").write_text("0 1000 1000\n")
+    (dwi / "sub-01_dwi.bvec").write_text("1 0 0\n0 1 0\n0 0 1\n")
+    (dwi / "sub-01_fieldmap.nii.gz").write_bytes(b"")
+
+    g = _build_project(tmp_path).graph
+
+    fmap = _obj_by_filename_suffix(g, "fieldmap")
+    ftypes = set(g.objects(fmap, RDF.type))
+    assert NIDM.B0FieldMap in ftypes
+    assert NIDM.DiffusionWeighted not in ftypes
+    assert list(g.objects(fmap, NIDM.hadImageUsageType)) == [NIDM.DistortionCorrection]
+
+    # the genuine dwi scan still gets its DiffusionWeighted usage + a bval object
+    dwi_obj = _obj_by_filename_suffix(g, "dwi")
+    assert NIDM.DiffusionWeighted in set(g.objects(dwi_obj, NIDM.hadImageUsageType))
+    assert list(g.subjects(RDF.type, BIDS_Constants.scans["bval"])), "dwi bval expected"
+
+
 # ---------------------------------------------------------------------------
 # PET scan -> PET modality
 # ---------------------------------------------------------------------------

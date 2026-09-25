@@ -46,16 +46,20 @@ def _has_glob_magic(token: str) -> bool:
 def bundled_cde_files() -> list[str]:
     """Return file paths (or URLs) for the ANTS/FS/FSL CDE files, local-first.
 
-    Resolution order: ``CDE_DIR`` env var, the installed ``nidm/core/cde_dir``
-    package directory, the ``/opt/project`` Docker location, then -- only if no
-    local copy is found -- the canonical GitHub raw URLs from
-    :data:`nidm.core.Constants.CDE_FILE_LOCATIONS`.
+    Resolution order: ``CDE_DIR`` env var, a ``cde_dir`` shipped alongside the
+    ``nidm.linkml.core`` package (if present), the ``/opt/project`` Docker
+    location, then -- only if no local copy is found -- the canonical GitHub raw
+    URLs from :data:`nidm.linkml.core.constants.CDE_FILE_LOCATIONS`.
+
+    Note: the LinkML-only distribution does not bundle the CDE ``.ttl`` files
+    (they are maintained in the ReproNim fsl/ants/segstats repos), so unless
+    ``CDE_DIR`` points at a local copy this resolves to the network URLs.
     """
     candidate_dirs = []
     if environ.get("CDE_DIR"):
         candidate_dirs.append(environ["CDE_DIR"])
-    try:  # the copy shipped inside the installed package
-        from nidm import core as _core
+    try:  # an optional copy shipped alongside the linkml core package
+        from nidm.linkml import core as _core
 
         candidate_dirs.append(path.join(path.dirname(_core.__file__), "cde_dir"))
     except Exception:  # pragma: no cover - import should always succeed

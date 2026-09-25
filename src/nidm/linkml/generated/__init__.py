@@ -2,7 +2,7 @@
 nidm.linkml.generated — Auto-generated Pydantic classes from the NIDM schema.
 
 Do not edit files in this package by hand.  They are regenerated from
-``src/nidm/experiment/schema/nidm_schema.yaml`` via::
+``src/nidm/linkml/schema/nidm_schema.yaml`` via::
 
     python scripts/regen_schema.py
 
