@@ -60,7 +60,8 @@ def main():
             dest="nidm_files",
             nargs="+",
             required=True,
-            help="A comma separated list of NIDM files with full path",
+            help="NIDM files with full path; comma- and/or space-separated "
+            "(e.g. -nl a.ttl,b.ttl  or  -nl a.ttl b.ttl)",
         )
 
     concat.add_argument(
@@ -72,6 +73,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Normalize the file list so this tool accepts BOTH comma-separated
+    # (like `pynidm concat`/`nidm_query`) and space-separated (argparse
+    # nargs="+") forms -- flatten any comma-joined tokens into a flat list.
+    if getattr(args, "nidm_files", None):
+        args.nidm_files = [
+            f for token in args.nidm_files for f in token.split(",") if f
+        ]
 
     # concatenate nidm files
     if args.command == "concat":
