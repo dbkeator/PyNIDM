@@ -56,23 +56,23 @@ Installation
 
 	$ pip install pynidm
 
-The default install ships the prov-free LinkML implementation (``nidm.linkml``),
-which backs the ``pynidm`` command-line tools and no longer depends on the
-``prov`` toolbox. The original prov-toolbox API -- the legacy wrapper classes
-under ``nidm.experiment`` (``Project``, ``Session``, ``Acquisition``, ...) --
-is optional and now requires the ``legacy`` extra:
+This installs the LinkML implementation (``nidm.linkml``), which backs all of
+the ``pynidm`` command-line tools and is built directly on `rdflib
+<https://rdflib.readthedocs.io>`_ -- it no longer depends on the ``prov``
+toolbox. Everything is imported from ``nidm.linkml``: graph construction from
+``nidm.linkml.experiment``, and the query, navigation, CDE, and REST layers
+from ``nidm.linkml.experiment`` / ``nidm.linkml.experiment.tools``.
+
+The original prov-toolbox implementation -- the ``nidm.experiment`` and
+``nidm.core`` wrapper classes from PyNIDM 4.x -- is **not** part of this
+release. Workflows that still depend on it can continue to install the 4.x
+line:
 
 .. code:: bash
 
-	$ pip install pynidm[legacy]
+	$ pip install "pynidm<5"
 
-New code should target ``nidm.linkml.experiment``.  Only the prov-toolbox
-wrapper classes (``Project``, ``Session``, ``Acquisition``, ...) need the
-``legacy`` extra; the prov-free query, navigation, CDE, and REST layers are
-still importable from their original ``nidm.experiment`` locations
-(``nidm.experiment.Query`` / ``Navigate`` / ``CDE`` / ``tools.rest``) with a
-plain ``pip install pynidm`` -- those names are now thin shims that re-export
-the relocated implementations in ``nidm.linkml``.
+New code should target ``nidm.linkml.experiment``.
 
 Architecture at a glance
 ========================
@@ -93,9 +93,8 @@ directly on `rdflib <https://rdflib.readthedocs.io>`_: the wrapper classes emit 
 plain ``rdflib.Graph``, so the graph *is* the data — there is no separate document
 model to keep in sync, and a class, its slot, and the RDF predicate it maps to are
 all declared once in the schema.  New code should target
-``nidm.linkml.experiment``; the earlier prov-toolbox implementation under
-``src/nidm/experiment`` remains available as the optional ``pynidm[legacy]``
-extra.
+``nidm.linkml.experiment``; the earlier prov-toolbox implementation is a
+separate release line (PyNIDM 4.x), installable via ``pip install "pynidm<5"``.
 
 For the full walkthrough — the wrapper engine, the query layer, how to change the
 model or add a CLI tool, testing, and the legacy-migration guide — see the

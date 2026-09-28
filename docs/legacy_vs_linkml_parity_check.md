@@ -21,7 +21,7 @@ This branch contains **both** converters, so a single environment runs both:
 
 (The legacy converter on this branch is byte-identical to the released legacy
 v4.5.4. To test the released artifact directly instead, make a second env with
-`pip install "pynidm[legacy]==4.5.4"` and run its `nidm.experiment.tools.bidsmri2nidm`.)
+`pip install "pynidm==4.5.4"` and run its `nidm.experiment.tools.bidsmri2nidm`.)
 
 ## 2. Environment
 

@@ -44,6 +44,21 @@ def _run(*args: str, timeout: int = 300) -> subprocess.CompletedProcess:
     return proc
 
 
+def _run_expect_clean_error(*args: str) -> None:
+    """Run a console script that should FAIL on bad input, and assert it fails
+    *gracefully*: nonzero exit and no raw Python traceback."""
+    exe = shutil.which(args[0])
+    if exe is None:
+        pytest.skip(f"console script not installed: {args[0]}")
+    proc = subprocess.run([exe, *args[1:]], capture_output=True, text=True, timeout=120)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, f"expected nonzero exit on bad input:\n{out[-1500:]}"
+    assert "Traceback (most recent call last)" not in out, (
+        f"`{' '.join(args)}` dumped a raw traceback instead of a clean error:\n"
+        f"{out[-1500:]}"
+    )
+
+
 # --------------------------------------------------------------------------
 # pynidm group
 # --------------------------------------------------------------------------
@@ -155,3 +170,43 @@ def test_pynidm_visualize(tmp_path: Path) -> None:
     ttl = tmp_path / "bv.ttl"
     ttl.write_bytes(_BRAINVOL.read_bytes())  # copy so output lands in writable tmp
     _run("pynidm", "visualize", "-nl", str(ttl), "-fmt", "png")
+
+
+# --------------------------------------------------------------------------
+# Missing/bad input -> clean error, not a raw traceback
+# --------------------------------------------------------------------------
+def test_nidm_query_missing_file_clean_error(tmp_path: Path) -> None:
+    _run_expect_clean_error(
+        "nidm_query",
+        "-nl",
+        str(tmp_path / "nope.ttl"),
+        "-p",
+        "-o",
+        str(tmp_path / "o.csv"),
+    )
+
+
+def test_pynidm_convert_missing_file_clean_error(tmp_path: Path) -> None:
+    _run_expect_clean_error(
+        "pynidm",
+        "convert",
+        "-nl",
+        str(tmp_path / "nope.ttl"),
+        "-t",
+        "jsonld",
+        "-out",
+        str(tmp_path),
+    )
+
+
+def test_csv2nidm_missing_file_clean_error(tmp_path: Path) -> None:
+    _run_expect_clean_error(
+        "csv2nidm",
+        "-csv",
+        str(tmp_path / "nope.csv"),
+        "-json_map",
+        str(tmp_path / "nope.json"),
+        "-no_concepts",
+        "-out",
+        str(tmp_path / "o.ttl"),
+    )

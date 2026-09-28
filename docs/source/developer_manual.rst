@@ -576,38 +576,38 @@ slot / slot_uri
 14. Migrating from the legacy API
 =================================
 
-Earlier PyNIDM versions were built on the ``prov`` toolbox (prov-toolbox). That
-implementation still ships for backward compatibility, and this section is for
-maintainers of downstream code that imported from it.
+PyNIDM 4.x was built on the ``prov`` toolbox (prov-toolbox), with the wrapper
+classes and tools under ``nidm.experiment`` / ``nidm.core``. PyNIDM 5 replaces
+that implementation entirely with the LinkML/rdflib code under ``nidm.linkml``.
+The ``nidm.experiment`` and ``nidm.core`` packages are **not** shipped in 5.x —
+there are no compatibility shims. This section is for maintainers of downstream
+code that imported from the 4.x packages.
 
 What changed
 ------------
 
-* The **maintained implementation is ``nidm.linkml``** and is installed by the
-  default ``pip install pynidm``. It is built directly on rdflib.
-* The **legacy wrapper classes** — ``Project``, ``Session``, ``Acquisition``,
-  ... under ``nidm.experiment`` — and ``nidm.core`` are now **optional**. Install
-  them with the ``legacy`` extra:
+* The **only** implementation in 5.x is ``nidm.linkml``, installed by
+  ``pip install pynidm``. It is built directly on rdflib (no prov-toolbox).
+* The legacy prov-toolbox implementation (``nidm.experiment`` wrapper classes,
+  ``nidm.core``, and the query / navigation / CDE / REST layers) is a separate,
+  frozen release line. Workflows that still need it should pin the 4.x line:
 
   .. code-block:: bash
 
-     pip install pynidm[legacy]
-
-* The **query / navigation / CDE / REST layers moved** into ``nidm.linkml``.
-  The legacy import paths still work: ``nidm.experiment.Query``,
-  ``nidm.experiment.CDE``, ``nidm.experiment.Navigate`` and
-  ``nidm.experiment.tools.rest`` are thin re-exports of the implementations now
-  living in ``nidm.linkml``, and they import without the ``legacy`` extra.
+     pip install "pynidm<5"
 
 Import migration
 ----------------
+
+If you are porting code off the 4.x line, update your imports to the
+``nidm.linkml`` equivalents:
 
 .. list-table::
    :header-rows: 1
    :widths: 50 50
 
-   * - Legacy import
-     - Preferred import
+   * - PyNIDM 4.x import
+     - PyNIDM 5 import
    * - ``from nidm.experiment import Project, Session``
      - ``from nidm.linkml.experiment import Project, Session``
    * - ``from nidm.experiment.Query import sparql_query_nidm``
@@ -617,21 +617,10 @@ Import migration
    * - ``from nidm.experiment.tools.rest import RestParser``
      - ``from nidm.linkml.experiment.tools.rest import RestParser``
 
-The legacy paths remain as compatibility shims for a deprecation window; new
-code should use the ``nidm.linkml`` paths.
+The command-line entry points (``pynidm``, ``bidsmri2nidm``, ``csv2nidm``,
+``nidm_query``, ``nidm_utils``) keep the same names and behavior; only the
+Python import paths moved.
 
-How the compatibility layer behaves
------------------------------------
-
-* ``nidm.experiment.__init__`` imports the legacy wrapper classes lazily, so
-  importing a re-exported module (e.g. ``nidm.experiment.Query``) works whether
-  or not the ``legacy`` extra is installed. Accessing a legacy wrapper class
-  without the extra raises a clear error pointing to
-  ``pip install pynidm[legacy]``.
-* The API surface of the legacy wrappers is unchanged; the difference is where
-  the code lives and how it is installed.
-
-A guard test, ``tests/linkml/test_prov_free.py``, exercises this boundary: it
-confirms the default (``nidm.linkml``) install path works without the legacy
-dependency present, and that the compatibility shims resolve correctly. If you
-extend ``nidm.linkml``, keep that test passing.
+A guard test, ``tests/linkml/test_prov_free.py``, confirms the shipped
+``nidm.linkml`` CLI imports without the ``prov`` toolbox present. If you extend
+``nidm.linkml``, keep that test passing.

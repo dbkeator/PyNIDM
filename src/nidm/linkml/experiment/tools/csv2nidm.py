@@ -1255,6 +1255,17 @@ def csv2nidm_main(argv: Optional[list] = None, prog: Optional[str] = None) -> in
         parser.print_help()
         sys.exit(1)
 
+    # Validate input files up front so a bad path yields a clear message rather
+    # than an opaque pandas/rdflib traceback deep in processing.
+    for label, fpath in (
+        ("-csv", getattr(args, "csv_file", None)),
+        ("-json_map", getattr(args, "json_map", None)),
+        ("-nidm", getattr(args, "nidm_file", None)),
+    ):
+        if fpath and not os.path.isfile(fpath):
+            print(f"ERROR: {label} file not found: {fpath}")
+            sys.exit(1)
+
     if args.logfile is not None:
         logging.basicConfig(
             filename=join(

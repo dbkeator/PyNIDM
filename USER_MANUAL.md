@@ -8,7 +8,7 @@ The full, up-to-date user manual is published on ReadTheDocs and built from
 
 It covers:
 
-- Installation (including the optional `pynidm[legacy]` extra)
+- Installation (the LinkML `nidm.linkml` implementation; the legacy 4.x line via `pip install "pynidm<5"`)
 - The NIDM model (graph hierarchy, participant linkage, data elements)
 - Converting data to NIDM — `bidsmri2nidm` (BIDS) and `csv2nidm` (assessments/derivatives)
 - Querying — `pynidm query` (SPARQL, the `-nl` resolver, the Oxigraph engine) and

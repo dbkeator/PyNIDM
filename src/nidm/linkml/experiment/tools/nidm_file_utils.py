@@ -20,8 +20,11 @@ common brain-volume questions resolve without the user listing them by hand.
 
 from __future__ import annotations
 import glob as _glob
+import logging
 from os import environ, path
 from nidm.linkml.experiment._constants_compat import Constants
+
+_log = logging.getLogger(__name__)
 
 # Suffixes treated as RDF/NIDM graph files (used as-is).
 _GRAPH_SUFFIXES = (".ttl", ".jsonld", ".json", ".n3", ".rdf", ".owl", ".nt")
@@ -133,8 +136,14 @@ def expand_nidm_file_list(
         elif _has_glob_magic(expanded):
             for found in sorted(_glob.glob(expanded, recursive=True)):
                 _add(found)
-        else:
+        elif path.exists(expanded):
             _add(expanded)
+        else:
+            # A plain path token that doesn't exist: warn and skip rather than
+            # passing it downstream, where an rdflib parse would raise an
+            # opaque traceback.  Callers treat an empty result as "no NIDM
+            # files found" and report it cleanly.
+            _log.warning("NIDM input not found, skipping: %s", token)
 
     if include_cdes:
         for cde in bundled_cde_files():

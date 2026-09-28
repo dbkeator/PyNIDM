@@ -1,9 +1,11 @@
 """ Tools for working with NIDM-Experiment files """
 
 from os.path import basename, join, splitext
+import sys
 import click
 from rdflib import Graph, util
 from nidm.linkml.experiment.tools.click_base import cli
+from nidm.linkml.experiment.tools.nidm_file_utils import expand_nidm_file_list
 
 # outtype (from the --type click.Choice) -> (file extension, rdflib serialize
 # format, extra serialize kwargs).  Table-driven so each format is one row
@@ -48,7 +50,15 @@ def convert(nidm_file_list, outtype, outdir):
     """
 
     ext, rdf_format, serialize_kwargs = _CONVERT_FORMATS[outtype]
-    for nidm_file in nidm_file_list.split(","):
+    nidm_files = expand_nidm_file_list(nidm_file_list)
+    if not nidm_files:
+        click.echo(
+            f"Error: no NIDM files found from -nl '{nidm_file_list}' "
+            "(check the path, directory, or manifest).",
+            err=True,
+        )
+        sys.exit(1)
+    for nidm_file in nidm_files:
         if outdir:
             outfile = join(outdir, splitext(basename(nidm_file))[0])
         else:

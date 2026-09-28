@@ -319,16 +319,14 @@ def test_csv2nidm_main_requires_nidm_or_out(tmp_path: Path):
         csv2nidm_main(["-csv", str(csv_path)])
 
 
-def test_csv2nidm_main_nidm_with_missing_file_raises(tmp_path: Path):
-    """Phase B: -nidm with a missing file path raises (rdflib can't parse it).
-
-    This documents that the tool defers file-existence errors to rdflib's
-    parse step rather than checking up front.  Could be improved in a
-    later polish pass, but matches legacy behavior.
-    """
+def test_csv2nidm_main_nidm_with_missing_file_exits_cleanly(tmp_path: Path, capsys):
+    """-nidm with a missing file path exits cleanly (nonzero) with a clear
+    message, rather than dumping an opaque rdflib traceback."""
     csv_path = _write_csv(tmp_path, "data.csv", ["participant_id"], [["sub-01"]])
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(SystemExit) as exc:
         csv2nidm_main(["-csv", str(csv_path), "-nidm", str(tmp_path / "nope.ttl")])
+    assert exc.value.code != 0
+    assert "not found" in capsys.readouterr().out.lower()
 
 
 def test_csv2nidm_main_writes_output_with_json_map(tmp_path: Path):
