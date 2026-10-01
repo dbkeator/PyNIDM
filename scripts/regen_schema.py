@@ -37,6 +37,9 @@ OUTPUT_PATH = (
 META_OUTPUT_PATH = (
     REPO_ROOT / "src" / "nidm" / "linkml" / "generated" / "nidm_schema_meta.py"
 )
+# Derived JSON copy of the schema, consumed by `pynidm queryai` as the AI
+# prompt's structural context.  Generated from the YAML so it can never drift.
+SCHEMA_JSON_PATH = REPO_ROOT / "src" / "nidm" / "linkml" / "schema" / "nidm_schema.json"
 
 
 def _linkml_version() -> str:
@@ -108,8 +111,40 @@ def main() -> int:
     # static lookup tables alongside the Pydantic classes.
     _write_meta_module()
 
+    # Also (re)generate the JSON copy consumed by `pynidm queryai`, flattening
+    # schema-level annotations to plain strings (the form queryai expects).
+    _write_schema_json()
+
     print("\nDone.  Smoke-test with:  python scripts/smoketest_generated.py")
     return 0
+
+
+def _write_schema_json() -> None:
+    """Write ``nidm_schema.json`` from the YAML, flattening annotations.
+
+    ``queryai`` reads schema-level annotations (graph_hierarchy, sparql_*,
+    important_notes) as plain strings.  LinkML annotations may be written in
+    the explicit ``{tag:, value:}`` form; flatten each to its string value so
+    the JSON stays queryai-friendly and in sync with the YAML (no manual edits).
+    """
+    import json
+    import yaml
+
+    with open(SCHEMA_PATH) as f:
+        schema = yaml.safe_load(f)
+
+    anns = schema.get("annotations")
+    if isinstance(anns, dict):
+        flat = {}
+        for tag, val in anns.items():
+            if isinstance(val, dict) and "value" in val:
+                flat[tag] = val["value"]
+            else:
+                flat[tag] = val
+        schema["annotations"] = flat
+
+    SCHEMA_JSON_PATH.write_text(json.dumps(schema, indent=2) + "\n")
+    print(f"Wrote schema JSON:      {SCHEMA_JSON_PATH.relative_to(REPO_ROOT)}")
 
 
 def _write_meta_module() -> None:

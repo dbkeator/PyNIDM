@@ -88,20 +88,85 @@ linkml_meta = LinkMLMeta({'annotations': {'graph_hierarchy': {'tag': 'graph_hier
                                                   '(nidm:Acquisition, '
                                                   'prov:Activity)  [via '
                                                   'dct:isPartOf]\n'
+                                                  '      -> '
+                                                  'prov:qualifiedAssociation -> '
+                                                  '[prov:agent Person ; '
+                                                  'prov:hadRole sio:Subject]\n'
                                                   '      -> AcquisitionObject '
                                                   '(nidm:AcquisitionObject, '
                                                   'prov:Entity)  [via '
                                                   'prov:wasGeneratedBy]\n'
-                                                  '  -> DataElement '
+                                                  '         (imaging modality is '
+                                                  'on acquisition_modality, NOT a '
+                                                  'distinct type)\n'
+                                                  '    -> AssessmentAcquisition '
+                                                  '(nidm:Acquisition + '
+                                                  'onli:instrument-based-assessment)\n'
+                                                  '      -> '
+                                                  'prov:qualifiedAssociation -> '
+                                                  '[prov:agent Person ; '
+                                                  'prov:hadRole sio:Subject]\n'
+                                                  '      -> AssessmentObject / '
+                                                  'DemographicsObject (+ '
+                                                  'onli:assessment-instrument)  '
+                                                  '[via prov:wasGeneratedBy]\n'
+                                                  '  -> DataElement / '
+                                                  'PersonalDataElement '
                                                   '(nidm:DataElement, '
                                                   'prov:Entity)\n'
                                                   '  -> Derivative '
                                                   '(nidm:Derivative, '
                                                   'prov:Activity)  [via '
                                                   'dct:isPartOf]\n'
-                                                  '    -> DerivativeObject '
-                                                  '(prov:Entity)  [via '
-                                                  'prov:wasGeneratedBy]'},
+                                                  '      -> '
+                                                  'prov:qualifiedAssociation -> '
+                                                  '[prov:agent Person ; '
+                                                  'prov:hadRole sio:Subject]\n'
+                                                  '      -> '
+                                                  'prov:qualifiedAssociation -> '
+                                                  '[prov:agent SoftwareAgent ; '
+                                                  'neuroimaging-analysis-software '
+                                                  'role]\n'
+                                                  '      -> prov:used -> an '
+                                                  'AcquisitionObject / source '
+                                                  'image\n'
+                                                  '      -> DerivativeObject '
+                                                  '(nidm:DerivativeObject, '
+                                                  'prov:Entity)  [via '
+                                                  'prov:wasGeneratedBy]\n'
+                                                  'Notes:\n'
+                                                  '  * A subject typically has a '
+                                                  'SEPARATE assessment Session '
+                                                  '(from participants.tsv)\n'
+                                                  '    and one or more imaging '
+                                                  'Sessions; both dct:isPartOf the '
+                                                  'Project.\n'
+                                                  '  * Subject linkage is ALWAYS '
+                                                  'Acquisition|AssessmentAcquisition|Derivative\n'
+                                                  '    -> '
+                                                  'prov:qualifiedAssociation -> '
+                                                  'Association(prov:agent=Person, '
+                                                  'hadRole=sio:Subject).\n'
+                                                  '  * Software provenance: a '
+                                                  'Derivative is associated with '
+                                                  'its producing tool\n'
+                                                  '    via '
+                                                  'prov:qualifiedAssociation -> '
+                                                  'SoftwareAgent; the graph itself '
+                                                  'is written\n'
+                                                  '    by PyNIDM via '
+                                                  'ExportActivity '
+                                                  'prov:wasAssociatedWith -> '
+                                                  'SoftwareAgent.\n'
+                                                  '  * Measured values (imaging '
+                                                  'metadata, assessment scores, '
+                                                  'derived volumes) are\n'
+                                                  '    stored as triples whose '
+                                                  'predicate is a DataElement URI, '
+                                                  'on the\n'
+                                                  '    AcquisitionObject / '
+                                                  'AssessmentObject / '
+                                                  'DerivativeObject.'},
                      'important_notes': {'tag': 'important_notes',
                                          'value': '(1) All instance identifiers '
                                                   'typically use the niiri: '
@@ -165,6 +230,165 @@ linkml_meta = LinkMLMeta({'annotations': {'graph_hierarchy': {'tag': 'graph_hier
                                                            'dct:description '
                                                            '?description }\n'
                                                            '}'},
+                     'sparql_get_demographics_by_subject': {'tag': 'sparql_get_demographics_by_subject',
+                                                            'value': '# '
+                                                                     'Demographics '
+                                                                     '(sex, race, '
+                                                                     'education, '
+                                                                     '...) for '
+                                                                     'each '
+                                                                     'subject.  '
+                                                                     'Demographics '
+                                                                     '# live on a '
+                                                                     'DemographicsObject '
+                                                                     '(onli:assessment-instrument, '
+                                                                     'with # '
+                                                                     'nidm:AssessmentUsageType '
+                                                                     'nidm:DemographicsInstrument) '
+                                                                     'generated by '
+                                                                     'an # '
+                                                                     'AssessmentAcquisition '
+                                                                     'associated '
+                                                                     'with the '
+                                                                     'subject. '
+                                                                     'SELECT '
+                                                                     '?subject_id '
+                                                                     '?dataElement '
+                                                                     '?value WHERE '
+                                                                     '{\n'
+                                                                     '  ?person '
+                                                                     'ndar:src_subject_id '
+                                                                     '?subject_id '
+                                                                     '.\n'
+                                                                     '  ?assoc '
+                                                                     'prov:agent '
+                                                                     '?person ;\n'
+                                                                     '         '
+                                                                     'prov:hadRole '
+                                                                     'sio:Subject '
+                                                                     '.\n'
+                                                                     '  ?acq '
+                                                                     'prov:qualifiedAssociation '
+                                                                     '?assoc .\n'
+                                                                     '  ?obj '
+                                                                     'prov:wasGeneratedBy '
+                                                                     '?acq ;\n'
+                                                                     '       '
+                                                                     'nidm:AssessmentUsageType '
+                                                                     'nidm:DemographicsInstrument '
+                                                                     ';\n'
+                                                                     '       '
+                                                                     '?dataElement '
+                                                                     '?value .\n'
+                                                                     '  '
+                                                                     '?dataElement '
+                                                                     'rdf:type '
+                                                                     'nidm:DataElement '
+                                                                     '.\n'
+                                                                     '}'},
+                     'sparql_get_derivative_software': {'tag': 'sparql_get_derivative_software',
+                                                        'value': '# Which software '
+                                                                 '(and version) '
+                                                                 'produced each '
+                                                                 'derivative, via '
+                                                                 'the # Derivative '
+                                                                 '-> '
+                                                                 'prov:qualifiedAssociation '
+                                                                 '-> SoftwareAgent '
+                                                                 'path. SELECT '
+                                                                 '?deriv ?software '
+                                                                 '?version '
+                                                                 '?command WHERE '
+                                                                 '{\n'
+                                                                 '  ?deriv '
+                                                                 'rdf:type '
+                                                                 'nidm:Derivative '
+                                                                 ';\n'
+                                                                 '         '
+                                                                 'prov:qualifiedAssociation '
+                                                                 '?assoc .\n'
+                                                                 '  ?assoc '
+                                                                 'prov:agent '
+                                                                 '?agent .\n'
+                                                                 '  ?agent '
+                                                                 'rdf:type '
+                                                                 'prov:SoftwareAgent '
+                                                                 ';\n'
+                                                                 '         '
+                                                                 'schema:name '
+                                                                 '?software .\n'
+                                                                 '  OPTIONAL { '
+                                                                 '?agent '
+                                                                 'schema:softwareVersion '
+                                                                 '?version }\n'
+                                                                 '  OPTIONAL { '
+                                                                 '?agent '
+                                                                 'nidm:command '
+                                                                 '?command }\n'
+                                                                 '}'},
+                     'sparql_get_derivative_values_by_subject': {'tag': 'sparql_get_derivative_values_by_subject',
+                                                                 'value': '# '
+                                                                          'Derived '
+                                                                          'values '
+                                                                          '(e.g. '
+                                                                          'brain '
+                                                                          'volumes) '
+                                                                          'linked '
+                                                                          'to '
+                                                                          'their '
+                                                                          'subject.  '
+                                                                          'The # '
+                                                                          'derivative->subject '
+                                                                          'path is '
+                                                                          'Derivative '
+                                                                          '-> '
+                                                                          'prov:qualifiedAssociation '
+                                                                          '-> # '
+                                                                          '[prov:agent '
+                                                                          '?person '
+                                                                          '; '
+                                                                          'prov:hadRole '
+                                                                          'sio:Subject]. '
+                                                                          'SELECT '
+                                                                          '?subject_id '
+                                                                          '?dataElement '
+                                                                          '?value '
+                                                                          'WHERE '
+                                                                          '{\n'
+                                                                          '  '
+                                                                          '?person '
+                                                                          'ndar:src_subject_id '
+                                                                          '?subject_id '
+                                                                          '.\n'
+                                                                          '  '
+                                                                          '?assoc '
+                                                                          'prov:agent '
+                                                                          '?person '
+                                                                          ';\n'
+                                                                          '         '
+                                                                          'prov:hadRole '
+                                                                          'sio:Subject '
+                                                                          '.\n'
+                                                                          '  '
+                                                                          '?deriv '
+                                                                          'prov:qualifiedAssociation '
+                                                                          '?assoc '
+                                                                          '.\n'
+                                                                          '  '
+                                                                          '?deriv_obj '
+                                                                          'prov:wasGeneratedBy '
+                                                                          '?deriv '
+                                                                          ';\n'
+                                                                          '             '
+                                                                          '?dataElement '
+                                                                          '?value '
+                                                                          '.\n'
+                                                                          '  '
+                                                                          '?dataElement '
+                                                                          'rdf:type '
+                                                                          'nidm:DataElement '
+                                                                          '.\n'
+                                                                          '}'},
                      'sparql_get_export_provenance': {'tag': 'sparql_get_export_provenance',
                                                       'value': 'SELECT ?activity '
                                                                '?label ?software '
@@ -462,7 +686,8 @@ class Acquisition(ConfiguredBaseModel):
                        'ExportActivity']} })
     is_part_of: Optional[str] = Field(default=None, description="""The Session this Acquisition belongs to""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
          'slot_uri': 'dct:isPartOf'} })
-    qualified_association: Optional[list[Association]] = Field(default=None, description="""Association(s) linking this activity to agents (participants)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition'], 'slot_uri': 'prov:qualifiedAssociation'} })
+    qualified_association: Optional[list[Association]] = Field(default=None, description="""Association(s) linking this activity to agents (participants)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition', 'Derivative'],
+         'slot_uri': 'prov:qualifiedAssociation'} })
     acquisition_objects: Optional[list[AcquisitionObject]] = Field(default=None, description="""Entities generated by this acquisition""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition']} })
 
 
@@ -592,7 +817,16 @@ class Derivative(ConfiguredBaseModel):
                                                   'value': 'prov:Activity'}},
          'class_uri': 'nidm:Derivative',
          'comments': ['RDF types: nidm:Derivative, prov:Activity',
-                      'Linked to Project via dct:isPartOf'],
+                      'Linked to Project via dct:isPartOf',
+                      'SUBJECT + SOFTWARE LINKAGE: a Derivative is tied to its subject '
+                      'and to the producing software the SAME way an Acquisition is -- '
+                      'via prov:qualifiedAssociation.  One Association has prov:agent '
+                      '-> the subject Person with prov:hadRole sio:Subject; another '
+                      'has prov:agent -> a SoftwareAgent with the '
+                      'neuroimaging-analysis-software role.  To go from a derived '
+                      'value to its subject: DerivativeObject prov:wasGeneratedBy -> '
+                      'Derivative prov:qualifiedAssociation -> [prov:agent ?person ; '
+                      'prov:hadRole sio:Subject].'],
          'from_schema': 'https://purl.org/nidash/nidm/schema'})
 
     identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
@@ -608,7 +842,9 @@ class Derivative(ConfiguredBaseModel):
                        'ExportActivity']} })
     is_part_of: Optional[str] = Field(default=None, json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
          'slot_uri': 'dct:isPartOf'} })
-    used: Optional[str] = Field(default=None, description="""Source entity consumed by this derivative activity""", json_schema_extra = { "linkml_meta": {'domain_of': ['Derivative', 'ExportActivity'], 'slot_uri': 'prov:used'} })
+    qualified_association: Optional[list[Association]] = Field(default=None, description="""Associations linking this derivative to its subject Person (role sio:Subject) and to the SoftwareAgent that produced it.  This is the direct derivative->subject path.""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition', 'Derivative'],
+         'slot_uri': 'prov:qualifiedAssociation'} })
+    used: Optional[str] = Field(default=None, description="""Source entity consumed by this derivative activity (e.g. the AcquisitionObject or raw image the derivative was computed from)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Derivative', 'ExportActivity'], 'slot_uri': 'prov:used'} })
 
 
 class DerivativeObject(ConfiguredBaseModel):
@@ -636,6 +872,117 @@ class DerivativeObject(ConfiguredBaseModel):
                        'ExportActivity']} })
     was_generated_by: Optional[str] = Field(default=None, description="""The Derivative activity that produced this object""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject', 'DerivativeObject'],
          'slot_uri': 'prov:wasGeneratedBy'} })
+
+
+class AssessmentAcquisition(Acquisition):
+    """
+    An Acquisition that collected instrument/assessment or demographics data (e.g. from participants.tsv or a neuropsych battery) rather than imaging. Same provenance shape as Acquisition -- linked to its subject Person via prov:qualifiedAssociation (role sio:Subject), holds its data on AcquisitionObjects -- but instances additionally carry rdf:type onli:instrument-based-assessment.
+    """
+    linkml_meta: ClassVar[LinkMLMeta] = LinkMLMeta({'annotations': {'additional_rdf_types': {'tag': 'additional_rdf_types',
+                                                  'value': 'prov:Activity, '
+                                                           'onli:instrument-based-assessment'}},
+         'class_uri': 'nidm:Acquisition',
+         'comments': ['RDF types: nidm:Acquisition, prov:Activity, '
+                      'onli:instrument-based-assessment',
+                      'Non-repeating measures (sex, race, years of education) and '
+                      'repeating assessments (neuropsych scores, age-at-assessment) '
+                      'are both modeled as AssessmentAcquisitions.  The '
+                      'participants.tsv assessment Session is a SEPARATE nidm:Session '
+                      'from the imaging Session(s) for the same subject.'],
+         'from_schema': 'https://purl.org/nidash/nidm/schema'})
+
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
+                       'Session',
+                       'Acquisition',
+                       'AcquisitionObject',
+                       'DataElement',
+                       'Derivative',
+                       'DerivativeObject',
+                       'Person',
+                       'SoftwareAgent',
+                       'Collection',
+                       'ExportActivity']} })
+    is_part_of: Optional[str] = Field(default=None, description="""The Session this Acquisition belongs to""", json_schema_extra = { "linkml_meta": {'domain_of': ['Session', 'Acquisition', 'Derivative'],
+         'slot_uri': 'dct:isPartOf'} })
+    qualified_association: Optional[list[Association]] = Field(default=None, description="""Association(s) linking this activity to agents (participants)""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition', 'Derivative'],
+         'slot_uri': 'prov:qualifiedAssociation'} })
+    acquisition_objects: Optional[list[AcquisitionObject]] = Field(default=None, description="""Entities generated by this acquisition""", json_schema_extra = { "linkml_meta": {'domain_of': ['Acquisition']} })
+
+
+class AssessmentObject(AcquisitionObject):
+    """
+    The entity produced by an AssessmentAcquisition.  Carries the measured assessment values as properties keyed by DataElement / PersonalDataElement URIs (the same value-as-predicate pattern as AcquisitionObject).
+    """
+    linkml_meta: ClassVar[LinkMLMeta] = LinkMLMeta({'annotations': {'additional_rdf_types': {'tag': 'additional_rdf_types',
+                                                  'value': 'prov:Entity, '
+                                                           'onli:assessment-instrument'}},
+         'class_uri': 'nidm:AcquisitionObject',
+         'comments': ['RDF types: nidm:AcquisitionObject, prov:Entity, '
+                      'onli:assessment-instrument',
+                      'A more specific instrument may be recorded as an ADDITIONAL '
+                      'rdf:type on the object (e.g. a named neuropsych scale), not as '
+                      'a slot value.'],
+         'from_schema': 'https://purl.org/nidash/nidm/schema'})
+
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
+                       'Session',
+                       'Acquisition',
+                       'AcquisitionObject',
+                       'DataElement',
+                       'Derivative',
+                       'DerivativeObject',
+                       'Person',
+                       'SoftwareAgent',
+                       'Collection',
+                       'ExportActivity']} })
+    was_generated_by: Optional[str] = Field(default=None, description="""The Acquisition that produced this object""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject', 'DerivativeObject'],
+         'slot_uri': 'prov:wasGeneratedBy'} })
+    acquisition_modality: Optional[AcquisitionModalityEnum] = Field(default=None, description="""Imaging modality (MRI, PET)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadAcquisitionModality'} })
+    image_contrast_type: Optional[ImageContrastTypeEnum] = Field(default=None, description="""Image contrast type (T1, T2, DWI, etc.)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageContrastType'} })
+    image_usage_type: Optional[ImageUsageTypeEnum] = Field(default=None, description="""Intended image usage (Anatomical, Functional, DWI)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageUsageType'} })
+    task: Optional[str] = Field(default=None, description="""Task name for functional MRI""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:Task'} })
+    run: Optional[int] = Field(default=None, description="""Run number for the acquisition (BIDS run entity).  Written by bidsmri2nidm/csv2nidm as nidm:AcquisitionObject with an integer value.""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:AcquisitionObject'} })
+    filename: Optional[str] = Field(default=None, description="""File path, often in BIDS format (e.g. bids::sub-XX/anat/sub-XX_T1w.nii.gz)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nfo:filename'} })
+    sha512: Optional[str] = Field(default=None, description="""SHA-512 hash of the file""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'crypto:sha512'} })
+    location: Optional[str] = Field(default=None, description="""URL or file path location""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'prov:Location'} })
+
+
+class DemographicsObject(AssessmentObject):
+    """
+    An AssessmentObject holding participant demographics (non-repeating measures: sex, race, years of education, handedness, ...).  Distinguished from a general AssessmentObject by nidm:AssessmentUsageType nidm:DemographicsInstrument.
+    """
+    linkml_meta: ClassVar[LinkMLMeta] = LinkMLMeta({'annotations': {'additional_rdf_types': {'tag': 'additional_rdf_types',
+                                                  'value': 'prov:Entity, '
+                                                           'onli:assessment-instrument'}},
+         'class_uri': 'nidm:AcquisitionObject',
+         'comments': ['RDF types: nidm:AcquisitionObject, prov:Entity, '
+                      'onli:assessment-instrument',
+                      'Also carries: nidm:AssessmentUsageType '
+                      'nidm:DemographicsInstrument'],
+         'from_schema': 'https://purl.org/nidash/nidm/schema'})
+
+    assessment_usage_type: Optional[str] = Field(default=None, description="""Marks the usage of this assessment object; for demographics this is nidm:DemographicsInstrument.""", json_schema_extra = { "linkml_meta": {'domain_of': ['DemographicsObject'], 'slot_uri': 'nidm:AssessmentUsageType'} })
+    identifier: str = Field(default=..., json_schema_extra = { "linkml_meta": {'domain_of': ['Project',
+                       'Session',
+                       'Acquisition',
+                       'AcquisitionObject',
+                       'DataElement',
+                       'Derivative',
+                       'DerivativeObject',
+                       'Person',
+                       'SoftwareAgent',
+                       'Collection',
+                       'ExportActivity']} })
+    was_generated_by: Optional[str] = Field(default=None, description="""The Acquisition that produced this object""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject', 'DerivativeObject'],
+         'slot_uri': 'prov:wasGeneratedBy'} })
+    acquisition_modality: Optional[AcquisitionModalityEnum] = Field(default=None, description="""Imaging modality (MRI, PET)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadAcquisitionModality'} })
+    image_contrast_type: Optional[ImageContrastTypeEnum] = Field(default=None, description="""Image contrast type (T1, T2, DWI, etc.)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageContrastType'} })
+    image_usage_type: Optional[ImageUsageTypeEnum] = Field(default=None, description="""Intended image usage (Anatomical, Functional, DWI)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:hadImageUsageType'} })
+    task: Optional[str] = Field(default=None, description="""Task name for functional MRI""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:Task'} })
+    run: Optional[int] = Field(default=None, description="""Run number for the acquisition (BIDS run entity).  Written by bidsmri2nidm/csv2nidm as nidm:AcquisitionObject with an integer value.""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nidm:AcquisitionObject'} })
+    filename: Optional[str] = Field(default=None, description="""File path, often in BIDS format (e.g. bids::sub-XX/anat/sub-XX_T1w.nii.gz)""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'nfo:filename'} })
+    sha512: Optional[str] = Field(default=None, description="""SHA-512 hash of the file""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'crypto:sha512'} })
+    location: Optional[str] = Field(default=None, description="""URL or file path location""", json_schema_extra = { "linkml_meta": {'domain_of': ['AcquisitionObject'], 'slot_uri': 'prov:Location'} })
 
 
 class Person(ConfiguredBaseModel):
@@ -777,6 +1124,9 @@ DataElement.model_rebuild()
 PersonalDataElement.model_rebuild()
 Derivative.model_rebuild()
 DerivativeObject.model_rebuild()
+AssessmentAcquisition.model_rebuild()
+AssessmentObject.model_rebuild()
+DemographicsObject.model_rebuild()
 Person.model_rebuild()
 SoftwareAgent.model_rebuild()
 Association.model_rebuild()

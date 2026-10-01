@@ -380,6 +380,15 @@ classes:
     comments:
       - "RDF types: nidm:Derivative, prov:Activity"
       - "Linked to Project via dct:isPartOf"
+      - >-
+        SUBJECT + SOFTWARE LINKAGE: a Derivative is tied to its subject and to
+        the producing software the SAME way an Acquisition is -- via
+        prov:qualifiedAssociation.  One Association has prov:agent -> the
+        subject Person with prov:hadRole sio:Subject; another has prov:agent ->
+        a SoftwareAgent with the neuroimaging-analysis-software role.  To go
+        from a derived value to its subject: DerivativeObject
+        prov:wasGeneratedBy -> Derivative prov:qualifiedAssociation ->
+        [prov:agent ?person ; prov:hadRole sio:Subject].
     attributes:
       identifier:
         range: uriorcurie
@@ -387,10 +396,20 @@ classes:
       is_part_of:
         slot_uri: dct:isPartOf
         range: Project
+      qualified_association:
+        slot_uri: prov:qualifiedAssociation
+        range: Association
+        multivalued: true
+        description: >-
+          Associations linking this derivative to its subject Person (role
+          sio:Subject) and to the SoftwareAgent that produced it.  This is the
+          direct derivative->subject path.
       used:
         slot_uri: prov:used
         range: uriorcurie
-        description: Source entity consumed by this derivative activity
+        description: >-
+          Source entity consumed by this derivative activity (e.g. the
+          AcquisitionObject or raw image the derivative was computed from)
 
   DerivativeObject:
     class_uri: nidm:DerivativeObject
@@ -412,6 +431,71 @@ classes:
         slot_uri: prov:wasGeneratedBy
         range: Derivative
         description: The Derivative activity that produced this object
+
+  # -- Assessments & demographics (non-imaging acquisitions) ---------------
+  #
+  # NOTE on imaging variants: MR/PET acquisitions and objects are NOT separate
+  # rdf:types -- bidsmri2nidm emits plain nidm:Acquisition / nidm:AcquisitionObject
+  # and records the modality on the acquisition_modality slot
+  # (nidm:hadAcquisitionModality -> nidm:MagneticResonanceImaging or
+  # nidm:PositronEmissionTomography).  So there are no MRAcquisition/PETObject
+  # classes here; filter imaging by acquisition_modality, not by a distinct type.
+
+  AssessmentAcquisition:
+    class_uri: nidm:Acquisition
+    is_a: Acquisition
+    annotations:
+      additional_rdf_types: prov:Activity, onli:instrument-based-assessment
+    description: >-
+      An Acquisition that collected instrument/assessment or demographics data
+      (e.g. from participants.tsv or a neuropsych battery) rather than imaging.
+      Same provenance shape as Acquisition -- linked to its subject Person via
+      prov:qualifiedAssociation (role sio:Subject), holds its data on
+      AcquisitionObjects -- but instances additionally carry rdf:type
+      onli:instrument-based-assessment.
+    comments:
+      - "RDF types: nidm:Acquisition, prov:Activity, onli:instrument-based-assessment"
+      - >-
+        Non-repeating measures (sex, race, years of education) and repeating
+        assessments (neuropsych scores, age-at-assessment) are both modeled as
+        AssessmentAcquisitions.  The participants.tsv assessment Session is a
+        SEPARATE nidm:Session from the imaging Session(s) for the same subject.
+
+  AssessmentObject:
+    class_uri: nidm:AcquisitionObject
+    is_a: AcquisitionObject
+    annotations:
+      additional_rdf_types: prov:Entity, onli:assessment-instrument
+    description: >-
+      The entity produced by an AssessmentAcquisition.  Carries the measured
+      assessment values as properties keyed by DataElement / PersonalDataElement
+      URIs (the same value-as-predicate pattern as AcquisitionObject).
+    comments:
+      - "RDF types: nidm:AcquisitionObject, prov:Entity, onli:assessment-instrument"
+      - >-
+        A more specific instrument may be recorded as an ADDITIONAL rdf:type on
+        the object (e.g. a named neuropsych scale), not as a slot value.
+
+  DemographicsObject:
+    class_uri: nidm:AcquisitionObject
+    is_a: AssessmentObject
+    annotations:
+      additional_rdf_types: prov:Entity, onli:assessment-instrument
+    description: >-
+      An AssessmentObject holding participant demographics (non-repeating
+      measures: sex, race, years of education, handedness, ...).  Distinguished
+      from a general AssessmentObject by nidm:AssessmentUsageType
+      nidm:DemographicsInstrument.
+    comments:
+      - "RDF types: nidm:AcquisitionObject, prov:Entity, onli:assessment-instrument"
+      - "Also carries: nidm:AssessmentUsageType nidm:DemographicsInstrument"
+    attributes:
+      assessment_usage_type:
+        slot_uri: nidm:AssessmentUsageType
+        range: uriorcurie
+        description: >-
+          Marks the usage of this assessment object; for demographics this is
+          nidm:DemographicsInstrument.
 
   # -- Agents --------------------------------------------------------------
 
@@ -570,10 +654,29 @@ annotations:
     Project (nidm:Project, prov:Activity)
       -> Session (nidm:Session, prov:Activity)  [via dct:isPartOf]
         -> Acquisition (nidm:Acquisition, prov:Activity)  [via dct:isPartOf]
+          -> prov:qualifiedAssociation -> [prov:agent Person ; prov:hadRole sio:Subject]
           -> AcquisitionObject (nidm:AcquisitionObject, prov:Entity)  [via prov:wasGeneratedBy]
-      -> DataElement (nidm:DataElement, prov:Entity)
+             (imaging modality is on acquisition_modality, NOT a distinct type)
+        -> AssessmentAcquisition (nidm:Acquisition + onli:instrument-based-assessment)
+          -> prov:qualifiedAssociation -> [prov:agent Person ; prov:hadRole sio:Subject]
+          -> AssessmentObject / DemographicsObject (+ onli:assessment-instrument)  [via prov:wasGeneratedBy]
+      -> DataElement / PersonalDataElement (nidm:DataElement, prov:Entity)
       -> Derivative (nidm:Derivative, prov:Activity)  [via dct:isPartOf]
-        -> DerivativeObject (prov:Entity)  [via prov:wasGeneratedBy]
+          -> prov:qualifiedAssociation -> [prov:agent Person ; prov:hadRole sio:Subject]
+          -> prov:qualifiedAssociation -> [prov:agent SoftwareAgent ; neuroimaging-analysis-software role]
+          -> prov:used -> an AcquisitionObject / source image
+          -> DerivativeObject (nidm:DerivativeObject, prov:Entity)  [via prov:wasGeneratedBy]
+    Notes:
+      * A subject typically has a SEPARATE assessment Session (from participants.tsv)
+        and one or more imaging Sessions; both dct:isPartOf the Project.
+      * Subject linkage is ALWAYS Acquisition|AssessmentAcquisition|Derivative
+        -> prov:qualifiedAssociation -> Association(prov:agent=Person, hadRole=sio:Subject).
+      * Software provenance: a Derivative is associated with its producing tool
+        via prov:qualifiedAssociation -> SoftwareAgent; the graph itself is written
+        by PyNIDM via ExportActivity prov:wasAssociatedWith -> SoftwareAgent.
+      * Measured values (imaging metadata, assessment scores, derived volumes) are
+        stored as triples whose predicate is a DataElement URI, on the
+        AcquisitionObject / AssessmentObject / DerivativeObject.
 
   sparql_get_all_projects: >-
     SELECT ?project ?title WHERE {
@@ -639,6 +742,49 @@ annotations:
       ?agent rdf:type prov:SoftwareAgent ;
              rdfs:label ?software ;
              schema:softwareVersion ?version .
+    }
+
+  sparql_get_derivative_values_by_subject: >-
+    # Derived values (e.g. brain volumes) linked to their subject.  The
+    # derivative->subject path is Derivative -> prov:qualifiedAssociation ->
+    # [prov:agent ?person ; prov:hadRole sio:Subject].
+    SELECT ?subject_id ?dataElement ?value WHERE {
+      ?person ndar:src_subject_id ?subject_id .
+      ?assoc prov:agent ?person ;
+             prov:hadRole sio:Subject .
+      ?deriv prov:qualifiedAssociation ?assoc .
+      ?deriv_obj prov:wasGeneratedBy ?deriv ;
+                 ?dataElement ?value .
+      ?dataElement rdf:type nidm:DataElement .
+    }
+
+  sparql_get_demographics_by_subject: >-
+    # Demographics (sex, race, education, ...) for each subject.  Demographics
+    # live on a DemographicsObject (onli:assessment-instrument, with
+    # nidm:AssessmentUsageType nidm:DemographicsInstrument) generated by an
+    # AssessmentAcquisition associated with the subject.
+    SELECT ?subject_id ?dataElement ?value WHERE {
+      ?person ndar:src_subject_id ?subject_id .
+      ?assoc prov:agent ?person ;
+             prov:hadRole sio:Subject .
+      ?acq prov:qualifiedAssociation ?assoc .
+      ?obj prov:wasGeneratedBy ?acq ;
+           nidm:AssessmentUsageType nidm:DemographicsInstrument ;
+           ?dataElement ?value .
+      ?dataElement rdf:type nidm:DataElement .
+    }
+
+  sparql_get_derivative_software: >-
+    # Which software (and version) produced each derivative, via the
+    # Derivative -> prov:qualifiedAssociation -> SoftwareAgent path.
+    SELECT ?deriv ?software ?version ?command WHERE {
+      ?deriv rdf:type nidm:Derivative ;
+             prov:qualifiedAssociation ?assoc .
+      ?assoc prov:agent ?agent .
+      ?agent rdf:type prov:SoftwareAgent ;
+             schema:name ?software .
+      OPTIONAL { ?agent schema:softwareVersion ?version }
+      OPTIONAL { ?agent nidm:command ?command }
     }
 
   important_notes: >-
