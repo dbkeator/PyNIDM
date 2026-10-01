@@ -29,6 +29,10 @@ for v5 — `auto` manages it. The narrative notes live in `RELEASE_v5.0.0.md`.
 - [ ] Docs build clean: `sphinx-build -W -b html docs/source /tmp/pynidm_docs`.
 - [ ] Dorota (external clean-install tester) has signed off.
 - [ ] Karl's B0FieldMap terms are final and the converter emits them (done).
+- [ ] Schema structural-parity landed: assessment/demographics classes +
+      Derivative qualified_association + SPARQL exemplars; `scripts/regen_schema.py`
+      re-run so pydantic/meta/`nidm_schema.json` are in sync
+      (`tests/linkml/test_schema_structure.py` green).
 
 ## 1. Preserve the legacy 4.x line
 
