@@ -99,12 +99,12 @@ def test_add_sessions_appends_and_dedupes():
 
 def test_get_sessions_returns_a_copy():
     p = Project()
-    sentinel = object()
-    p.add_sessions(sentinel)
+    sentinel_obj = object()
+    p.add_sessions(sentinel_obj)
     sessions = p.get_sessions()
     sessions.append("something else")
     # Original list should be unaffected.
-    assert p.get_sessions() == [sentinel]
+    assert p.get_sessions() == [sentinel_obj]
 
 
 def test_get_derivatives_and_dataelements_start_empty():

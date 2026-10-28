@@ -165,10 +165,10 @@ def test_add_dataelements_dedupes():
 def test_add_derivatives_dedupes():
     """Project.add_derivatives is the plural-named legacy facade."""
     p = Project()
-    sentinel = object()
-    assert p.add_derivatives(sentinel) is True
-    assert p.add_derivatives(sentinel) is False
-    assert p.get_derivatives() == [sentinel]
+    sentinel_obj = object()
+    assert p.add_derivatives(sentinel_obj) is True
+    assert p.add_derivatives(sentinel_obj) is False
+    assert p.get_derivatives() == [sentinel_obj]
 
 
 # ---------------------------------------------------------------------------
