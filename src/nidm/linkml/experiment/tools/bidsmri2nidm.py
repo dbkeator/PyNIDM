@@ -688,9 +688,10 @@ def _apply_json_keys(obj, metadata: dict) -> None:
 
     Iterates over *metadata* keys; when ``BIDS_Constants.json_keys``
     has a mapping, emit one triple on ``obj.graph`` with the mapped
-    predicate.  List values are joined with empty string (matches
-    legacy quirk for the per-scan sidecar; the root-level descent
-    uses comma-join instead).
+    predicate.  List values (e.g. ``SliceTiming``) are comma-joined so
+    the serialized value stays parseable; an empty join would run the
+    numbers together into an unrecoverable string (see incf-nidash
+    PyNIDM #458 / dbkeator PyNIDM #9, which fix the same bug).
     """
     for key, value in metadata.items():
         normalized_key = key.replace(" ", "_")
@@ -699,7 +700,7 @@ def _apply_json_keys(obj, metadata: dict) -> None:
         predicate = BIDS_Constants.json_keys[normalized_key]
         if isinstance(value, list):
             obj.graph.add(
-                (obj.identifier, predicate, Literal("".join(str(e) for e in value)))
+                (obj.identifier, predicate, Literal(",".join(str(e) for e in value)))
             )
         else:
             obj.graph.add((obj.identifier, predicate, Literal(value)))

@@ -1327,3 +1327,34 @@ def test_json_sidecar_metadata_emitted(tmp_path: Path):
     assert len(bold_objs) == 1
     tasknames = list(g.objects(bold_objs[0], BIDS_Constants.json_keys["TaskName"]))
     assert [str(t) for t in tasknames] == ["rest"]
+
+
+def test_list_valued_sidecar_field_is_comma_joined(tmp_path: Path):
+    """List-valued sidecar fields (e.g. SliceTiming) serialize as a
+    comma-joined string, so the value stays parseable.
+
+    Regression guard for the empty-join bug: ``_apply_json_keys`` once
+    joined list values with "" (matching the legacy quirk fixed in
+    incf-nidash PyNIDM #458), turning [0.0, 0.5, 1.0] into "0.00.51.0" --
+    an unrecoverable run of digits.  The join must be ",".
+    """
+    _write_dataset_description(tmp_path)
+    _write_nonempty_t1w_scan(tmp_path, subject="sub-01")
+    slice_timing = [0.0, 0.5, 1.0, 1.5]
+    _write_bold_with_sidecar(
+        tmp_path,
+        subject="sub-01",
+        task="rest",
+        sidecar={"TaskName": "rest", "SliceTiming": slice_timing},
+    )
+    _write_participants_tsv(tmp_path, [{"participant_id": "sub-01"}])
+
+    g = _build_project(tmp_path).graph
+
+    bold_objs = list(g.subjects(NIDM.hadImageUsageType, NIDM.Functional))
+    assert len(bold_objs) == 1
+    st = list(g.objects(bold_objs[0], BIDS_Constants.json_keys["SliceTiming"]))
+    assert len(st) == 1
+    # Comma-joined, not concatenated: round-trips back to the original list.
+    assert str(st[0]) == ",".join(str(e) for e in slice_timing)
+    assert [float(x) for x in str(st[0]).split(",")] == slice_timing
